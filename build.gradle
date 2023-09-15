@@ -1,0 +1,31 @@
+
+
+description = "sample template for asciidoctor project"
+
+configure(allprojects  - project(":bom")) { abjects ->
+	apply plugin: "java-library"
+	group = "com.jcohy.sample"
+	version = "1.0.0"
+
+	repositories {
+		maven { url = 'https://maven.aliyun.com/repository/central'}
+		mavenCentral()
+	}
+
+	dependencies {
+		implementation('org.junit.jupiter:junit-jupiter')
+		implementation('org.junit.jupiter:junit-jupiter-engine')
+	}
+
+	configurations.configureEach {
+		resolutionStrategy {
+			cacheChangingModulesFor 0, "minutes"
+			cacheDynamicVersionsFor 0, "minutes"
+		}
+	}
+}
+
+configure(rootProject) { abjects ->
+	apply from: "${rootDir}/gradle/docs.gradle"
+}
+

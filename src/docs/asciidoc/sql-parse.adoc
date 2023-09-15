@@ -1,0 +1,453 @@
+
+
+[[mybatis-init-excute]]
+== SQL 解析
+
+在前面，我们已经完成了 xml 文件的全部解析过程，相应的 `SqlSessionFactory` `ResultMapping`、`ResultMap` 和 `MappedStatement` 对象也已经准备就绪，其中 `MappedStatement` 中又包含了 `SqlSource` 对象，那么当 Mybatis 执行 Mapper 中的方法时是如何组装这些对象的？
+
+Mapper 接口是通过 MyBatis 框架内置的自动代理机制来实例化的。
+
+具体来说，MyBatis 在启动时会扫描所有的 Mapper 接口，并使用 JDK 动态代理为这些 Mapper 接口生成代理实现类。这些代理实现类实现了 Mapper 接口中定义的所有方法，并通过 MyBatis 框架中的 SqlSession 来执行对数据库的 CRUD 操作。
+mybatis 根据我们的 sql 类型和返回值，判断如何组装和执行我们的 SQL，执行 以我们本示例为例，方法的最终会进入到 `DefaultSqlSession` 的 `selectOne` 方法。`DefaultSqlSession` 是 `SqlSession` 的默认实现。让我们以此为切入点
+
+[source,java]
+.DefaultSqlSession
+----
+public class DefaultSqlSession implements SqlSession {
+    //... 省略部分代码
+    @Override
+    public <T> T selectOne(String statement, Object parameter) {
+        // Popular vote was to return null on 0 results and throw exception on too many.
+        List<T> list = this.selectList(statement, parameter);
+        if (list.size() == 1) {
+            return list.get(0);
+        } else if (list.size() > 1) {
+            throw new TooManyResultsException("Expected one result (or null) to be returned by selectOne(), but found: " + list.size());
+        } else {
+        return null;
+        }
+    }
+    //... 省略部分代码
+}
+----
+
+再往下走，最终会执行到下面的位置
+
+[source,java]
+.DefaultSqlSession
+----
+public class DefaultSqlSession implements SqlSession {
+    //... 省略部分代码
+    private <E> List<E> selectList(String statement, Object parameter, RowBounds rowBounds, ResultHandler handler) {
+        try {
+			// 从 configuration 中获取 MappedStatement 对象
+            MappedStatement ms = configuration.getMappedStatement(statement);
+			// 执行
+            return executor.query(ms, wrapCollection(parameter), rowBounds, handler);
+        } catch (Exception e) {
+            throw ExceptionFactory.wrapException("Error querying database.  Cause: " + e, e);
+        } finally {
+            ErrorContext.instance().reset();
+        }
+    }
+    //... 省略部分代码
+}
+----
+
+从 configuration 中获取 `MappedStatement` 对象 ，然后开始执行。在执行过程中，首先使用 `MappedStatement` 对象的 `getBoundSql` 获取到 `BoundSql` 对象。
+
+[source,java]
+.MappedStatement
+----
+public final class MappedStatement {
+    //... 省略部分代码
+    public BoundSql getBoundSql(Object parameterObject) {
+		// 从 SqlSource 中获取 bound 对象
+        BoundSql boundSql = sqlSource.getBoundSql(parameterObject);
+		// 参数映射集合
+        List<ParameterMapping> parameterMappings = boundSql.getParameterMappings();
+        if (parameterMappings == null || parameterMappings.isEmpty()) {
+            boundSql = new BoundSql(configuration, boundSql.getSql(), parameterMap.getParameterMappings(), parameterObject);
+        }
+
+        // check for nested result maps in parameter mappings (issue #30)
+        // 获取 ResultMapping id
+        for (ParameterMapping pm : boundSql.getParameterMappings()) {
+            String rmId = pm.getResultMapId();
+            if (rmId != null) {
+                ResultMap rm = configuration.getResultMap(rmId);
+                if (rm != null) {
+                  hasNestedResultMaps |= rm.hasNestedResultMaps();
+                }
+            }
+        }
+        return boundSql;
+    }
+    //... 省略部分代码
+}
+----
+
+. 从 `SqlSource` 中获取 `BoundSql` 对象，其中包含可执行的 SQL 语句与参数信息
+
+=== 获取 `BoundSql` 对象
+
+由于我们这里的是 `SqlSource` 类型为 `DynamicSqlSource`。我们就以此为例，我们就接着往下走
+
+[source,java]
+.DynamicSqlSource
+----
+public class DynamicSqlSource implements SqlSource {
+    //... 省略部分代码
+    @Override
+    public BoundSql getBoundSql(Object parameterObject) {
+		// 构建 `DynamicContext` 对象
+        DynamicContext context = new DynamicContext(configuration, parameterObject);
+		// 这里其实是使用了访问者模式，不同 SqlNode 具有不同的访问实现。并将结果追加到 context 的 sqlBuilder 属性中
+        // 在本例中，sqlBuilder 的结果值为 select * from saga_user WHERE id = #{param1} ，忽略空格和换行
+        rootSqlNode.apply(context);
+		// 构建 SqlSourceBuilder 对象。
+        SqlSourceBuilder sqlSourceParser = new SqlSourceBuilder(configuration);
+		// 获取参数类型
+        Class<?> parameterType = parameterObject == null ? Object.class : parameterObject.getClass();
+		// 这里进行 Sql 转换，将 #{param1} 转换为 ? 占位符。
+        SqlSource sqlSource = sqlSourceParser.parse(context.getSql(), parameterType, context.getBindings());
+        BoundSql boundSql = sqlSource.getBoundSql(parameterObject);
+		// 添加附加参数到 BoundSql 对象中，因为上一步创建的`BoundSql`对象时候传入的仅是入参信息，没有添加附加参数
+        context.getBindings().forEach(boundSql::setAdditionalParameter);
+        return boundSql;
+    }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+----
+public class DynamicContext {
+    public DynamicContext(Configuration configuration, Object parameterObject) {
+        if (parameterObject != null && !(parameterObject instanceof Map)) {
+            MetaObject metaObject = configuration.newMetaObject(parameterObject);
+            boolean existsTypeHandler = configuration.getTypeHandlerRegistry().hasTypeHandler(parameterObject.getClass());
+            bindings = new ContextMap(metaObject, existsTypeHandler);
+        } else {
+            bindings = new ContextMap(null, false);
+        }
+        bindings.put(PARAMETER_OBJECT_KEY, parameterObject);
+        bindings.put(DATABASE_ID_KEY, configuration.getDatabaseId());
+    }
+}
+
+----
+
+. 构建 `DynamicContext` 对象。
+. 循环访问所有的 `SqlNode` 节点，这里不同的 `SqlNode` 节点具有不同的访问操作，还记得我们之前生成的 `rootSqlNode` 结构吗？我们来回顾一下：
+
+[source,text]
+----
+MixedSqlNode(rootSqlNode)
+    contents(3个节点)
+        StaticTextSqlNode
+            content: select * from saga_user
+        WhereSqlNode
+            contents(3 个节点)
+                StaticTextSqlNode：
+                IfSqlNode
+                    test: id != null
+                    content(1 个节点)
+                        MixedSqlNode
+                            contents(1 个节点)
+                                StaticTextSqlNode
+                                    content: id = #{param1}
+                StaticTextSqlNode：
+        StaticTextSqlNode：
+----
+
+我们来看看这些 `SqlNode` 都有哪些行为
+
+[source,java]
+.MixedSqlNode
+----
+public class MixedSqlNode implements SqlNode {
+    private final List<SqlNode> contents;
+
+    public MixedSqlNode(List<SqlNode> contents) {
+        this.contents = contents;
+    }
+
+    @Override
+    public boolean apply(DynamicContext context) {
+		// 循环遍历访问 SqlNode
+        contents.forEach(node -> node.apply(context));
+        return true;
+    }
+}
+----
+
+[source,java]
+.IfSqlNode
+----
+public class IfSqlNode implements SqlNode {
+	//... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+		// 通过 OgnlCache 根据 Ognl 表达式从上下文的 ContextMap 中获取转换后的结果。也既判断是否应用 <if /> 标签内的 SqlNode 节点们
+        if (evaluator.evaluateBoolean(test, context.getBindings())) {
+			// <2> 解析该<if />节点中的内容
+            contents.apply(context);
+            return true;
+        }
+		// <3> 不符合
+        return false;
+    }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+.ChooseSqlNode
+----
+public class ChooseSqlNode implements SqlNode {
+	//... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+		// <1> 先判断 <when /> 标签中，是否有符合条件的节点。
+        // 如果有，则进行应用。并且只因应用一个 SqlNode 对象
+        for (SqlNode sqlNode : ifSqlNodes) {
+            if (sqlNode.apply(context)) {
+                return true;
+            }
+        }
+		// <2> 再判断  <otherwise /> 标签，是否存在
+        // 如果存在，则进行应用
+        if (defaultSqlNode != null) {
+            defaultSqlNode.apply(context);
+            return true;
+        }
+        return false;
+    }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+.ForEachSqlNode
+----
+public class ForEachSqlNode implements SqlNode {
+	//... 省略部分代码
+  @Override
+  public boolean apply(DynamicContext context) {
+    Map<String, Object> bindings = context.getBindings();
+	// 获得表达式对应的集合,无论 expression 对应的实际类型是数组还是 map，最后都会给处理成集合的形式
+    final Iterable<?> iterable = evaluator.evaluateIterable(collectionExpression, bindings, Optional.ofNullable(nullable).orElseGet(configuration::isNullableOnForEach));
+	// 如果为空集合，则直接返回 true
+    if (iterable == null || !iterable.iterator().hasNext()) {
+        return true;
+    }
+	// 是否为集合的第一个元素的标志位
+    boolean first = true;
+	// 拼接"("
+    applyOpen(context);
+    // 遍历的索引
+    int i = 0;
+     for (Object o : iterable) {
+        DynamicContext oldContext = context;
+		// 如果是第一个元素，则不需要对其添加分隔符
+        if (first || separator == null) {
+            context = new PrefixedContext(context, "");
+        } else {
+			// 其余元素都需要添加分隔符
+            context = new PrefixedContext(context, separator);
+        }
+		// 因为集合中的每一个元素都会有一个唯一对应的 PrefixedContext 对象，所以这个 number 可以认为在当前集合中是唯一的
+        int uniqueNumber = context.getUniqueNumber();
+        // Issue #709
+        // 转换在上下文中的占位符
+        if (o instanceof Map.Entry) {
+            @SuppressWarnings("unchecked")
+            Map.Entry<Object, Object> mapEntry = (Map.Entry<Object, Object>) o;
+			// 处理索引与实参之间的关系
+            applyIndex(context, mapEntry.getKey(), uniqueNumber);
+			// 处理 item 与实参之间的关系
+            applyItem(context, mapEntry.getValue(), uniqueNumber);
+        } else {
+            applyIndex(context, i, uniqueNumber);
+            applyItem(context, o, uniqueNumber);
+        }
+		// 处理子 SqlNode 节点
+        contents.apply(new FilteredDynamicContext(configuration, context, index, item, uniqueNumber));
+        if (first) {
+            first = !((PrefixedContext) context).isPrefixApplied();
+        }
+        context = oldContext;
+        i++;
+	}
+    // 追加")"
+    applyClose(context);
+    context.getBindings().remove(item);
+    context.getBindings().remove(index);
+    return true;
+  }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+.SetSqlNode
+----
+public class SetSqlNode extends TrimSqlNode {
+
+    private static final List<String> COMMA = Collections.singletonList(",");
+
+    public SetSqlNode(Configuration configuration,SqlNode contents) {
+        super(configuration, contents, "SET", COMMA, null, COMMA);
+    }
+}
+----
+
+[source,java]
+.WhereSqlNode
+----
+public class WhereSqlNode extends TrimSqlNode {
+
+    private static List<String> prefixList = Arrays.asList("AND ","OR ","AND\n", "OR\n", "AND\r", "OR\r", "AND\t", "OR\t");
+
+    public WhereSqlNode(Configuration configuration, SqlNode contents) {
+        super(configuration, contents, "WHERE", prefixList, null, null);
+    }
+}
+----
+
+`SetSqlNode` 和 `WhereSqlNode` 都继承自 `TrimSqlNode`，处理原理相同，但也有一点不同，我们在 `TrimSqlNode` 中进行说明
+
+[source,java]
+.TrimSqlNode
+----
+public class TrimSqlNode implements SqlNode {
+    //... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+        // FilteredDynamicContext 类的作用是维护所有的动态 SQL 片段，并在构建最终的动态 SQL 时对其进行过滤和处理，以生成最终的有效 SQL 语句。
+        // 它的主要目的是为了避免静态 SQL 片段和动态 SQL 片段的冲突，以确保生成的 SQL 语句是正确的。
+        FilteredDynamicContext filteredDynamicContext = new FilteredDynamicContext(context);
+        boolean result = contents.apply(filteredDynamicContext);
+        filteredDynamicContext.applyAll();
+        return result;
+    }
+    public void applyAll() {
+		// 去掉前后面的空格
+        sqlBuffer = new StringBuilder(sqlBuffer.toString().trim());
+		// 转换为大写
+        String trimmedUppercaseSql = sqlBuffer.toString().toUpperCase(Locale.ENGLISH);
+        if (trimmedUppercaseSql.length() > 0) {
+            // 如果 prefix 不为空，则添加前缀。比如如果为 WhereSqlNode，其前缀 WHERE 在其构造函数中指定。
+            // WHERE id = #{param1}
+            applyPrefix(sqlBuffer, trimmedUppercaseSql);
+			// 如果 suffix 不为空，则添加后缀。
+            applySuffix(sqlBuffer, trimmedUppercaseSql);
+        }
+        delegate.appendSql(sqlBuffer.toString());
+    }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+.StaticTextSqlNode
+----
+public class StaticTextSqlNode implements SqlNode {
+	//... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+		// 直接追加文本值
+        context.appendSql(text);
+        return true;
+    }
+    //... 省略部分代码
+}
+----
+
+[source,java]
+.TextSqlNode
+----
+public class ChooseSqlNode implements SqlNode {
+	//... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+        // <1> 创建 BindingTokenParser 对象
+        // <2> 创建 GenericTokenParser 对象
+        GenericTokenParser parser = createParser(new BindingTokenParser(context, injectionFilter));
+        // <3> 执行解析
+        // <4> 将解析的结果，添加到 context 中
+        context.appendSql(parser.parse(text));
+        return true;
+    }
+
+    private GenericTokenParser createParser(TokenHandler handler) {
+        return new GenericTokenParser("${", "}", handler);
+    }
+    //... 省略部分代码
+}
+----
+
+在 XML 文件中编写 SQL 语句时，如果使用到了 `${}` 作为变量时，那么会生成 `TextSqlNode` 对象。
+
+NOTE: 在 MyBatis 处理 SQL 语句时就会将 `${}` 进行替换成对应的参数，存在 SQL 注入的安全性问题。
+而 `#{}` 就不一样了，MyBatis 会将其替换成 `?` 占位符，通过 `java.sql.PreparedStatement` 进行预编译处理，不存在上面的问题
+
+[source,java]
+.VarDeclSqlNode
+----
+public class VarDeclSqlNode implements SqlNode {
+	//... 省略部分代码
+    @Override
+    public boolean apply(DynamicContext context) {
+        // 变量个表达式进行绑定
+        final Object value = OgnlCache.getValue(expression, context.getBindings());
+        context.bind(name, value);
+        return true;
+    }
+    //... 省略部分代码
+}
+----
+
+当遍历完 `SqlNode` 对象后，然后通过构建 `SqlSourceBuilder` 对象来进行占位符处理。
+
+[source,java]
+.SqlSourceBuilder
+----
+public class SqlSourceBuilder extends BaseBuilder {
+    public SqlSource parse(String originalSql, Class<?> parameterType, Map<String, Object> additionalParameters) {
+		// originalSql = select * from saga_user WHERE id = #{param1}
+        // 构建 ParameterMappingTokenHandler 对象，用于解析 #{} 的内容，创建 ParameterMapping 对象，并将其替换成?占位符
+        ParameterMappingTokenHandler handler = new ParameterMappingTokenHandler(configuration, parameterType, additionalParameters);
+		// 构建 GenericTokenParser 对象，进行占位符转换
+        GenericTokenParser parser = new GenericTokenParser("#{", "}", handler);
+        String sql;
+        if (configuration.isShrinkWhitespacesInSql()) {
+            sql = parser.parse(removeExtraWhitespaces(originalSql));
+        } else {
+			// 转换后的结果 sql = select * from saga_user WHERE id = ?
+            sql = parser.parse(originalSql);
+        }
+		// 构建 StaticSqlSource 对象，转化为静态 SQL
+        return new StaticSqlSource(configuration, sql, handler.getParameterMappings());
+    }
+}
+
+----
+
+至此，`BoundSql` 对象构建完成。这里简单总结下 `BoundSql` 的构建过程：
+
+. 创建本次解析的动态 SQL 语句的上下文，设置入参信息
+. 根据上下文应用整个 `SqlNode`，内部包含的所有 `SqlNode` 都会被应用，最终解析后的 SQL 会保存上下文中
+. 创建 `SqlSourceBuilder` 构建对象 sqlSourceParser
+. 调用 sqlSourceParser 的 `parse` 方法对第2步解析后的SQL语句进行转换，`#{}` 全部替换成 `?` 占位符，并创建对应的 `ParameterMapping` 对象
+. 通过第 4 步返回的 `StaticSqlSource` 对象创建 `BoundSql` 对象
+. 添加附加参数到 `BoundSql` 对象中，因为上一步创建的 `BoundSql` 对象时候传入的仅是入参信息，没有添加附加参数（通过 `<bind />` 标签生成的，或者 `<foreach />` 标签中的集合的元素）
+
+Mybatis 的 `ParameterHandler` 接口有两个实现 `MybatisParameterHandler` 和 `DefaultParameterHandler`，其作用都是根据 `BoundSql` 对象将入参设置到 `java.sql.PreparedStatement` 预编译对象中，然后执行 SQL 查询，封装结果，这一块就不具体演示了。
+
+=== 总结
+
+在 MyBatis 初始化的过程中，会将 XML 映射文件中的 `<select />` `<insert />` `<update />` `<delete />` 节点解析成 `MappedStatement` 对象，其中会将节点中定义的 SQL 语句通过 `XMLLanguageDriver` 语言驱动类创建一个 `SqlSource` 对象，
+
+通过 `SqlSource` 这个对象根据入参可以获取到对应的 `BoundSql` 对象，`BoundSql` 对象中包含了数据库需要执行的 SQL 语句、`ParameterMapping` 参数信息、入参对象和附加的参数（通过 `<bind />` 标签生成的，或者 `<foreach />` 标签中的集合的元素等等）
