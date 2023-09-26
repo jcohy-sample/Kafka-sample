@@ -1,0 +1,446 @@
+[[kafka-broker]]
+== Kafka Broker
+
+== Kafka Broker 工作流程
+
+ZooKeeper 存储了 Kafka 集群的多个节点，每个节点都存储了不同的信息。以下是一些主要节点列表及其对应的描述：
+
+1. /brokers/ids：存储了 Kafka 集群中所有 Broker 的元数据信息，每个节点的路径是 `/brokers/ids/<brokerId>`，值是一个 JSON 格式的描述，包括 Broker 的 ID、主机名、端口号等。
+2. /brokers/topics：存储了 Kafka 所有 Topic 的元数据信息，每个节点的路径是 `/brokers/topics/<topicName>`，值是一个 JSON 格式的描述，包括该 Topic 的分区列表及其副本所在的 Broker ID。
+3. /brokers/topics/<topicName>/partitions：存储了 Kafka 每个 Topic 的分区信息，每个节点的路径是 `/brokers/topics/<topicName>/partitions/<partitionId>`，值是一个 JSON 格式的描述，包括分区的 Leader、副本列表等信息。
+4. /consumers：存储了 Kafka 消费者组的相关信息，每个节点的路径是 `/consumers/<consumerGroupId>`，值可以是消费者组的偏移量信息、负载均衡信息等。
+5. /controller：存储了当前集群中的 Controller 的信息，路径是 `/controller`，值是一个 JSON 格式的描述，包括当前 Controller 的 Broker ID、主机名等。
+
+这只是一些常见的节点列表示例，实际上 ZooKeeper 还存储了其他与 Kafka 相关的信息，例如 ACL（访问控制列表）、临时节点等。这些节点和对应的描述信息一起构成了 Kafka 集群的元数据和协调机制。
+
+. /admin/delete_topics:
+. /cluster/id:
+. /config/brokers:
+. /config/changes:
+. /config/topics:
+. /config/clients:
+. /config/users:
+. /log_dir_event_notification:
+. /latest_producer_id_block:
+. /Isr_change_notification:
+. /Controller_epoch:
+
+image::img/kafka-broker001.png[]
+
+== broker 中的重要参数
+
+
+|===
+| 参数名称 | 描述
+
+| replica.lag.time.max.ms
+| ISR 中，如果 Follower 长时间未向 Leader 发送通 信请求或同步数据，则该 Follower 将被踢出 ISR。 该时间阈值，默认 30s。
+
+| auto.leader.rebalance.enable
+| 默认是 true。 自动 Leader Partition 平衡。
+
+| leader.imbalance.per.broker.percentage
+| 默认是 10%。每个 broker 允许的不平衡的 leader 的比率。如果每个 broker 超过了这个值，控制器 会触发 leader 的平衡。
+
+| leader.imbalance.check.interval.seconds
+| 默认值 300 秒。检查 leader 负载是否平衡的间隔时 间。
+
+| log.segment.bytes
+| Kafka 中 log 日志是分成一块块存储的，此配置是 指 log 日志划分 成块的大小，默认值 1G。
+
+| log.index.interval.bytes
+| 默认 4kb，kafka 里面每当写入了 4kb 大小的日志 (.log)，然后就往 index 文件里面记录一个索引。
+
+| log.retention.hours
+| Kafka 中数据保存的时间，默认 7 天。
+
+| log.retention.minutes
+| Kafka 中数据保存的时间，分钟级别，默认关闭。
+
+| log.retention.ms
+| Kafka 中数据保存的时间，毫秒级别，默认关闭。
+
+| log.retention.check.interval.ms
+| 检查数据是否保存超时的间隔，默认是 5 分钟。
+
+| log.retention.bytes
+| 默认等于-1，表示无穷大。超过设置的所有日志总 大小，删除最早的 segment。
+
+| log.cleanup.policy
+| 默认是 delete，表示所有数据启用删除策略; 如果设置值为 compact，表示所有数据启用压缩策 略。
+
+| num.io.threads
+| 默认是 8。负责写磁盘的线程数。整个参数值要占 总核数的 50%。
+
+| num.replica.fetchers
+| 副本拉取线程数，这个参数占总核数的 50%的 1/3
+
+| num.network.threads
+| 默认是 3。数据传输线程数，这个参数占总核数的 50%的 2/3 。
+
+| log.flush.interval.messages
+| 强制页缓存刷写到磁盘的条数，默认是 long 的最 大值，9223372036854775807。一般不建议修改， 交给系统自己管理。
+
+| log.flush.interval.ms
+| 每隔多久，刷数据到磁盘，默认是 null。一般不建 议修改，交给系统自己管理。
+|===
+
+== 节点服役和退役
+
+在 Kafka 中，Broker 节点的服役和退役是指将节点添加到或从 Kafka 集群中移除的过程。这种操作可以用来扩展集群的容量、调整资源分配或进行维护任务。
+
+节点的服役（节点添加）过程包括以下步骤：
+
+1. 部署新的 Broker 节点：首先，在新的服务器或虚拟机上安装和配置 Kafka，并确保其可以连接到 ZooKeeper。
+
+2. 更新集群配置：接下来，需要更新 Kafka 集群的配置，将新的 Broker 节点添加到集群中。这涉及到在 Kafka 配置文件中指定新节点的 ID、监听地址和端口，以及其他相关配置。
+
+3. 启动新的 Broker 节点：然后，启动新的 Broker 进程，使其连接到 ZooKeeper，并加入到 Kafka 集群中。
+
+4. 等待数据平衡：当新的 Broker 节点加入集群后，Kafka 会自动开始进行数据的重新分配，以实现负载均衡。这个过程可能需要一定时间，取决于集群的数据量和配置。
+
+节点的退役（节点移除）过程包括以下步骤：
+
+1. 更新集群配置：首先，需要更新 Kafka 集群的配置，从集群配置文件中删除要移除的 Broker 节点的相关信息。
+
+2. 停止要移除的 Broker 节点：然后，停止要移除的 Broker 进程，使其不再参与集群的运行。
+
+3. 数据再平衡：在 Broker 节点停止后，Kafka 会自动触发数据的重新分配（数据再平衡），以确保集群中的数据仍然可以正常访问。
+
+需要注意的是，在进行节点服役或退役操作时，要确保集群配置的一致性和正确性，并谨慎处理节点的添加和移除，确保数据的完整性和可用性。此外，建议在进行操作之前备份数据，以防止意外情况发生。更确切的操作步骤和细节可能因 Kafka 版本和环境而有所不同，因此请参考 Kafka 的官方文档或咨询管理员以获得更准确的指导。
+
+假设现在有三台 broker 节点，broker0,broker1,broker2。
+
+=== 节点服役
+
+添加一台 broker3，并对指定主题进行负载均衡。
+
+. 部署新的 broker3 节点
+. 执行负载均衡操作
++
+.. 创建一个要均衡的主题。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim topics-to-move.json
+{
+"topics": [
+        {"topic": "first"}
+    ],
+    "version": 1
+}
+----
++
+.. 生成一个负载均衡的计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --topics-to-move-json-file topics-to-move.json --broker-list "0,1,2,3" --generate
+Current partition replica assignment
+{"version":1,"partitions":[{"topic":"first","partition":0,"replic as":[0,2,1],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[2,1,0],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[1,0,2],"log_dirs":["any"," any","any"]}]}
+Proposed partition reassignment configuration
+{"version":1,"partitions":[{"topic":"first","partition":0,"replic as":[2,3,0],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[3,0,1],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[0,1,2],"log_dirs":["any"," any","any"]}]}
+----
++
+.. 创建副本存储计划(所有副本存储在 broker0、broker1、broker2、broker3 中)。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim increase-replication-factor.json
+{"version":1,"partitions":[{"topic":"first","partition":0,"replic as":[2,3,0],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[3,0,1],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[0,1,2],"log_dirs":["any"," any","any"]}]}
+----
++
+.. 执行副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --execute
+----
++
+.. 验证副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % kafka-reassign-partitions.sh --
+bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --verify
+Status of partition reassignment: Reassignment of partition first-0 is complete. Reassignment of partition first-1 is complete. Reassignment of partition first-2 is complete.
+Clearing broker-level throttles on brokers 0,1,2,3 Clearing topic-level throttles on topic first
+----
+
+== 节点退役
+
+将 broker3 退役
+
+先按照退役一台节点，生成执行计划，然后按照服役时操作流程执行负载均衡。
+
+. 执行负载均衡操作
+.. 创建一个要均衡的主题。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim topics-to-move.json
+{
+"topics": [
+        {"topic": "first"}
+    ],
+"version": 1
+}
+----
++
+.. 创建执行计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --topics-to-move-json-file topics-to-move.json --broker-list "0,1,2" --generate
+Current partition replica assignment {"version":1,"partitions":[{"topic":"first","partition":0,"replic as":[2,0,1],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[3,1,2],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[0,2,3],"log_dirs":["any"," any","any"]}]}
+Proposed partition reassignment configuration {"version":1,"partitions":[{"topic":"first","partition":0,"replicas":[2,0,1],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[0,1,2],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[1,2,0],"log_dirs":["any"," any","any"]}]}
+----
++
+.. 创建副本存储计划(所有副本存储在 broker0、broker1、broker2 中)。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim increase-replication-factor.json
+{"version":1,"partitions":[{"topic":"first","partition":0,"replic as":[2,0,1],"log_dirs":["any","any","any"]},{"topic":"first","par tition":1,"replicas":[0,1,2],"log_dirs":["any","any","any"]},{"to pic":"first","partition":2,"replicas":[1,2,0],"log_dirs":["any"," any","any"]}]}
+----
++
+.. 执行副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --execute
+----
++
+.. 验证副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --verify
+Status of partition reassignment: Reassignment of partition first-0 is complete. Reassignment of partition first-1 is complete. Reassignment of partition first-2 is complete.
+Clearing broker-level throttles on brokers 0,1,2,3 Clearing topic-level throttles on topic first
+----
++
+. 执行停止命令
+
+
+== Kafka 副本
+
+在 Kafka 中，副本（Replica）是指同一个分区的消息的复制。每个分区可以有多个副本，其中一个被称为领导者（Leader），其他副本被称为追随者（Follower）。
+
+以下是关于 Kafka 副本的一些重要概念和工作原理：
+
+1. 领导者（Leader）：每个分区在任意时刻都有一个副本充当领导者。领导者负责处理读写请求，并将写入的消息复制到追随者副本。生产者和消费者都与领导者进行交互。
+
+2. 追随者（Follower）：追随者副本是与领导者保持同步的副本。它们接收来自领导者的消息复制，但不处理客户端的请求。追随者的存在提供了副本的冗余和故障恢复功能。
+
+3. 副本同步：副本同步是指追随者副本从领导者副本复制消息。Kafka 使用一种称为ISR（In-Sync Replica）的机制来确保副本同步。只有在ISR列表中的副本才会被认为是同步的，并参与到消息的复制和读取中。
+
+4. 高可用性：通过使用多个副本，Kafka 提供了高可用性。当领导者副本发生故障时，一个追随者副本会被选举为新的领导者，以保持服务的可用性。
+
+副本的存在带来了许多好处，包括容错性、故障恢复和提高读取吞吐量。Kafka 的设计目标之一是保证消息的持久性和可靠性，副本的机制是实现这一目标的重要组成部分。
+
+需要注意的是，Kafka 副本的数量和复制机制可以根据需求进行配置，以在性能和可用性之间进行权衡。这些配置选项可以在 Kafka 的相关配置文件中进行设置。同时，副本同步和领导者选举等机制是由 Kafka 自动处理的，无需手动干预。
+
+=== 副本基本信息
+
+* Kafka 副本作用:提高数据可靠性。
+* Kafka 默认副本 1 个，生产环境一般配置为 2 个，保证数据可靠性;太多副本会 增加磁盘存储空间，增加网络上数据传输，降低效率。
+* Kafka 中副本分为:Leader 和 Follower。Kafka 生产者只会把数据发往 Leader， 然后 Follower 找 Leader 进行同步数据。
+* Kafka 分区中的所有副本统称为 AR(Assigned Replicas)。 `AR = ISR + OSR`。
+** ISR，表示和 Leader 保持同步的 Follower 集合。如果 Follower 长时间未向 Leader 发送通信请求或同步数据，则该 Follower 将被踢出 ISR。该时间阈值由 replica.lag.time.max.ms 参数设定，默认 30s。Leader 发生故障之后，就会从 ISR 中选举新的 Leader。
+** OSR，表示 Follower 与 Leader 副本同步时，延迟过多的副本。
+
+=== Leader 选举流程
+
+Leader 选举是 Kafka 集群中的一个重要过程，用于在领导者副本失效时选择一个新的副本作为新的领导者。以下是 Leader 选举的具体流程，包含了与 ZooKeeper 的交互：
+
+1. Broker 发现领导者失效：Kafka 集群中的每个 Broker 定期检查它们所负责的分区的领导者副本的存活状态。如果一个 Broker 发现领导者副本失效（如检测到心跳信号停止），则开始进行 Leader 选举。
+
+2. 联系 ZooKeeper：失效的 Broker 开始与 ZooKeeper 进行交互，并在 `/controller` 节点查找当前的 Kafka Controller。
+
+3. 竞选 Leader：失效的 Broker 参与 Leader 选举，它首先在 `/brokers/ids` 节点创建一个临时的选举节点，并在该节点上设置自己的 Broker ID。
+
+4. 排队等待：参与 Leader 选举的所有 Broker 根据一定的顺序（通常是按照 Broker ID 排序）开始排队等待。等待是为了确保每个 Broker 可以按照顺序获取竞选的机会。
+
+5. 选举算法协调：一旦排队的 Broker 获得机会，它将尝试成为新的领导者。在此过程中，ZooKeeper 负责协调选举算法（如通过 ZooKeeper 的临时节点、Watcher 监听等）。
+
+6. 判断副本健康状态：竞选的 Broker 会检查它自己以及其他副本的健康状态，包括日志完整性和同步进度。
+
+7. 比较日志位置：竞选的 Broker 比较与领导者副本和其他追随者副本的日志最后已复制位置(High Watermark)。通常，具有最新的已复制位置的副本会被选举为新的领导者。
+
+8. 领导者选举结果：一旦新的领导者副本选举出来，ZooKeeper 会将结果通知给 Broker，并更新相关的元数据信息。
+
+9. 更新元数据和路由：选举结束后，新的领导者副本的元数据会被更新，并通过与 ZooKeeper 交互，通知集群中的其他 Broker 和客户端。
+
+10. 客户端重新连接：一旦选举完成并更新了元数据信息，Kafka 客户端可能需要重新连接新的领导者以继续进行消息的生产和消费。
+
+通过与 ZooKeeper 的交互，Kafka 实现了可靠的 Leader 选举过程。ZooKeeper 提供了分布式协调和同步服务，与 Kafka 协作，确保在发生领导者失效时，能够选择一个健康的副本作为新的领导者，以保持集群的可用性和数据的一致性。
+请注意，随着 Kafka 的版本演进和引入新的特性（如 KRaft 元数据存储机制），Kafka 在 Leader 选举过程中的具体实现可能会有所不同。您可以查阅 Kafka 的官方文档来获取特定版本的详细信息。
+
+
+=== Leader 和 Follower 故障处理细节
+
+先了解两个概念：
+
+* LEO(Log End Offset):每个副本的最后一个offset，LEO其实就是最新的offset + 1。
+* HW(High Watermark):所有副本中最小的LEO 。
+
+image::img/kafka-broker002.png[]
+
+image::img/kafka-broker003.png[]
+
+=== 分区副本分配
+
+如果 kafka 服务器只有 4 个节点，那么设置 kafka 的分区数大于服务器台数，在 kafka 底层如何分配存储副本呢?
+
+. 创建 16 分区，3 个副本
+..创建一个新的 topic，名称为 second。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --partitions 16 --replication-factor 3 -- topic second
+----
++
+.. 查看分区和副本情况。
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic second
+Topic: second4 Partition: 0 Leader: 0 Replicas: 0,1,2 Isr: 0,1,2
+Topic: second4 Partition: 1 Leader: 1 Replicas: 1,2,3 Isr: 1,2,3
+Topic: second4 Partition: 2 Leader: 2 Replicas: 2,3,0 Isr: 2,3,0
+Topic: second4 Partition: 3 Leader: 3 Replicas: 3,0,1 Isr: 3,0,1
+
+Topic: second4 Partition: 4 Leader: 0 Replicas: 0,2,3 Isr: 0,2,3
+Topic: second4 Partition: 5 Leader: 1 Replicas: 1,3,0 Isr: 1,3,0
+Topic: second4 Partition: 6 Leader: 2 Replicas: 2,0,1 Isr: 2,0,1
+Topic: second4 Partition: 7 Leader: 3 Replicas: 3,1,2 Isr: 3,1,2
+
+Topic: second4 Partition: 8 Leader: 0 Replicas: 0,3,1 Isr: 0,3,1
+Topic: second4 Partition: 9 Leader: 1 Replicas: 1,0,2 Isr: 1,0,2
+Topic: second4 Partition: 10 Leader: 2 Replicas: 2,1,3 Isr: 2,1,3
+Topic: second4 Partition: 11 Leader: 3 Replicas: 3,2,0 Isr: 3,2,0
+
+Topic: second4 Partition: 12 Leader: 0 Replicas: 0,1,2 Isr: 0,1,2
+Topic: second4 Partition: 13 Leader: 1 Replicas: 1,2,3 Isr: 1,2,3
+Topic: second4 Partition: 14 Leader: 2 Replicas: 2,3,0 Isr: 2,3,0
+Topic: second4 Partition: 15 Leader: 3 Replicas: 3,0,1 Isr: 3,0,1
+----
+
+image::img/kafka-broker004.png[]
+
+=== 生产经验 -- 手动调整分区副本存储
+
+在生产环境中，每台服务器的配置和性能不一致，但是Kafka只会根据自己的代码规则创建对应的分区副 本，就会导致个别服务器存储压力较大。所有需要手动调整分区副本的存储。
+
+需求:创建一个新的topic，4个分区，两个副本，名称为three。将该topic的所有副本都存储到broker0和 broker1两台服务器上。
+
+image::img/kafka-broker005.png[]
+
+手动调整分区副本存储的步骤如下:
+
+. 创建一个新的 topic，名称为 three。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --partitions 4 --replication-factor 2 -- topic three
+----
++
+. 查看分区副本存储情况。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic three
+----
++
+. 创建副本存储计划(所有副本都指定存储在 broker0、broker1 中)。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim increase-replication-factor.json
+----
++
+输入如下内容:
++
+[source,text]
+----
+{
+   "version":1,
+"partitions":[{"topic":"three","partition":0,"replicas":[0,1]}, {"topic":"three","partition":1,"replicas":[0,1]}, {"topic":"three","partition":2,"replicas":[1,0]}, {"topic":"three","partition":3,"replicas":[1,0]}]
+}
+----
++
+. 执行副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --execute
+----
++
+. 验证副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --verify
+----
++
+. 查看分区副本存储情况。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe --topic three
+----
+
+=== 生产经验 -- Leader Partition 负载平衡
+
+正常情况下，Kafka 本身会自动把 Leader Partition 均匀分散在各个机器上，来保证每台机器的读写吞吐量都是均匀的。但是如果某 些 broker 宕机，会导致 Leader Partition 过于集中在其他少部分几台 broker 上，这会导致少数几台 broker 的读写请求压力过高，
+其他宕机的 broker 重启之后都是 follower partition，读写请求很低，造成集群负载不均衡。
+
+image::img/kafka-broker006.png[]
+
+
+|===
+| 参数名称 | 描述
+
+| auto.leader.rebalance.enable
+| 默认是 true。 自动 Leader Partition 平衡。生产环 境中，leader 重选举的代价比较大，可能会带来 性能影响，建议设置为 false 关闭。
+
+| leader.imbalance.per.broker.percentage
+| 默认是 10%。每个 broker 允许的不平衡的 leader 的比率。如果每个 broker 超过了这个值，控制器 会触发 leader 的平衡。
+
+| leader.imbalance.check.interval.seconds
+| 默认值 300 秒。检查 leader 负载是否平衡的间隔 时间。
+|===
+
+=== 生产经验 -- 增加副本因子
+
+在生产环境当中，由于某个主题的重要等级需要提升，我们考虑增加副本。副本数的 增加需要先制定计划，然后根据计划执行。
+
+. 创建 topic
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --partitions 3 --replication-factor 1 -- topic four
+----
++
+. 手动增加副本存储
+.. 创建副本存储计划(所有副本都指定存储在 broker0、broker1、broker2 中)。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % vim increase-replication-factor.json
+----
++
+输入如下内容:
++
+[source,text]
+----
+{"version":1,"partitions":[{"topic":"four","partition":0,"replica s":[0,1,2]},{"topic":"four","partition":1,"replicas":[0,1,2]},{"t opic":"four","partition":2,"replicas":[0,1,2]}]}
+----
++
+.. 执行副本存储计划。
++
+[source,text]
+----
+jcohy@jcohy-mac ~ % bin/kafka-reassign-partitions.sh -- bootstrap-server localhost:9092 --reassignment-json-file increase-replication-factor.json --execute
+----
+

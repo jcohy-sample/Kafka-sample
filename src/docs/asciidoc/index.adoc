@@ -1,71 +1,26 @@
-[[mybatis-init]]
-= MyBatis 解析和执行 SQL 分析
+[[kafka]]
+= Kafka
+include::attributes.adoc[]
 
-本项目使用的是 MybatisPlus 编码，MybatisPlus 通过自动配置为项目注入 `SqlSessionFactory` 实例，初始化 Mybatis 配置，大概分为以下几个步骤。
+****
+作者网页:
+https://www.jcohy.com[*https://www.jcohy.com*]
 
-* 创建 Configuration 全局配置对象，并进行初始化配置
-* 解析 Mapper 接口中的注解信息和 XML 映射文件，解析后的配置信息会形成相应的对象并保存到 Configuration 全局配置对象中
-* 构建 `SqlSessionFactory` 对象，通过它可以创建 `DefaultSqlSessionFactory` 对象，MyBatis 中 `SqlSessionFactory` 的默认实现类
+我的学习笔记,记录学习过程中的笔记以及遇到的问题,以及我的一些经验总结.如果出现链接失效,或者想知道更多的内容等情况可以提交 https://github.com/jcohy/jcohy-issues/issues[Issues] 提醒我修改相关内容.
 
-NOTE: 关于创建 Configuration 全局配置对象，这里不做过多说明，当后面遇到的时候会提到。
+本教程整理于尚硅谷 kafka 教程
+****
 
-首先关于代码中的核心类进行简单说明,我们的解析过程将围绕这些核心类展开:
+include::overview.adoc[leveloffset=+1]
 
-* com.baomidou.mybatisplus.core.MybatisConfiguration：`MybatisConfiguration` 是 MyBatis 框架的配置对象，主要存储了 MyBatis 框架的配置信息，包括数据源配置、事务管理器配置、映射器配置等。它是 MyBatis 的核心配置类，控制着 MyBatis 的整体行为。通过 MybatisSqlSessionFactoryBean 可以访问该配置对象，以便在 Spring 应用程序中定制 MyBatis 的行为。
-* com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean: `MybatisSqlSessionFactoryBean` 是一个 Spring Boot 中的对象，主要作用是创建并管理 Mybatis 的 `SqlSessionFactory`，以便程序可以从中创建一个会话进行数据库操作。 在 Spring Boot 中，通常会配置这个类并将它交给 Spring 容器管理，以便通过 `@Autowired` 将其注入到其他地方使用。当接收到请求时，程序可以从中创建一个会话并使用它执行数据库操作。
-* org.apache.ibatis.builder.xml.XMLMapperBuilder：`XMLMapperBuilder` 对象是 MyBatis 框架中解析 XML 配置文件的类，主要作用是从 XML 文件中读取配置信息，并将其映射为 MyBatis 可以使用的 Configuration 对象，这个对象包含了关于数据源、事务管理、缓存、映射信息等各种配置。`XMLMapperBuilder` 类提供了许多方法来读取配置信息，例如读取 SQL 语句，读取结果映射信息，读取缓存配置等。此外，`XMLMapperBuilder` 也实现了 MyBatis 中解析 XML 文件的核心逻辑。 通过创建 `XMLMapperBuilder` 对象，我们就可以读取并使用 MyBatis 中的配置信息。
-* org.apache.ibatis.builder.MapperBuilderAssistant：`MapperBuilderAssistant` 对象是 MyBatis 框架中的一个辅助类，主要用于帮助解析映射配置文件并创建映射语句对象（MappedStatement）。它通过解析配置文件中的信息，以及通过配置信息对应的映射语句等相关操作来完成对映射配置的解析，并且生成映射语句对象，方便程序员使用。
-* org.apache.ibatis.builder.xml.XMLStatementBuilder：解析 XML 映射文件中的 Statement 配置（`<select />` `<update />` `<delete />` `<insert />` 标签）
-* org.apache.ibatis.parsing.XNode：`XNode` 对象是一个包装类，代表了 XML 文档中的一个节点。`XNode` 用于表示配置信息或映射文件中的节点，其封装了该节点的所有信息，包括该节点的名称、属性、文本内容等。通过对 `XNode` 对象的操作，可以获取该节点的各种信息，并用于解析 Mybatis 配置文件或映射文件中的信息，生成相应的映射关系和执行映射语句等。
-* org.apache.ibatis.mapping.ResultMapping：保存 `<resultMap />` 标签的子标签相关信息，也就是 Java Type 与 Jdbc Type 的映射信息
-* org.apache.ibatis.mapping.ResultMap：保存了 `<resultMap />` 标签的配置信息以及子标签的所有信息
-* org.apache.ibatis.mapping.MappedStatement：保存了解析 `<select />` `<update />` `<delete />` `<insert />` 标签内的 SQL 语句所生成的所有信息
-* org.apache.ibatis.mapping.SqlSource：在 MyBatis 中，`SQLSource` 对象是一个 SQL 语句的表示，它可以被 MyBatis 执行。它用于保存 SQL 文本以及 SQL 语句中可能存在的任何动态参数。`SQLSource` 对象在解析过程中被创建，并用于动态生成将被执行的最终 SQL 语句。 `SQLSource` 对象是 MyBatis 框架的重要组件，因为它允许灵活和动态生成 SQL 语句。这对于需要基于用户输入或其他运行时条件动态构建 SQL 语句的应用程序特别有用。通过使用 `SQLSource` 对象，MyBatis 可以在执行之前生成最终的 SQL 语句，以确保其优化且最新。
-* org.apache.ibatis.scripting.xmltags.XMLLanguageDriver：`LanguageDriver` 的默认实现，它主要用于动态 SQL 的生成。 `XMLLanguageDriver` 是基于 XML 的语言驱动，它是基于 MyBatis 的动态 SQL 标签定义的语言驱动。通过使用 `XMLLanguageDriver`，可以在 SQL 语句的 XML 映射文件中使用动态 SQL 标签，从而生成动态 SQL。
-`XMLLanguageDriver` 允许您在 SQL 语句的映射文件中定义动态 SQL，而不是在 Java 代码中定义。这有助于更好地分离数据访问逻辑和业务逻辑。它也允许您在不更改 Java 代码的情况下修改 SQL 语句，从而更方便地维护和更新您的数据访问代码。
-* org.apache.ibatis.scripting.xmltags.XMLScriptBuilder：`XMLScriptBuilder` 对象是 MyBatis 的一个核心组件，它用于解析和构建 SQL 语句的执行任务，负责将 SQL 脚本（XML 或者注解中定义的 SQL 语句）解析成 `SqlSource`（`DynamicSqlSource` 或者 `RawSqlSource`）资源对象。它使用 XML 映射文件中的信息，将 SQL 语句转换为 `SqlSession` 对象可以执行的任务，并将查询结果映射到 Java 对象。
-因此，`XMLScriptBuilder` 对象在 MyBatis 的整个查询过程中起着重要的作用，它解析 XML 映射文件并创建执行 SQL 语句的任务，最终实现查询结果与 Java 对象的映射。
-* org.apache.ibatis.scripting.xmltags.SqlNode：`SqlNode` 是 MyBatis 中的一个接口，它代表了一段 SQL 语句的节点。在 MyBatis 中，动态 SQL 是通过 `SqlNode` 对象生成的。MyBatis 可以使用 SqlNode 对象来生成动态 SQL 语句，并将其作为最终的静态 SQL 语句执行。
-通过使用 `SqlNode`，MyBatis 可以在不更改映射文件的情况下更加灵活地生成动态 SQL 语句。`SqlNode` 的使用与具体的数据库无关，因此您可以在不同的数据库环境中使用相同的映射文件。
-总的来说，`SqlNode` 对象是 MyBatis 用于动态 SQL 生成的核心组件，它提供了灵活性和可维护性，并且可以在不更改映射文件的情况下生成动态 SQL 语句。MyBatis 中的一些常用的 SqlNode 实现类如下：
-** StaticTextSqlNode：用于生成静态的 SQL 语句。
-** IfSqlNode：用于生成带有 if 条件的动态 SQL 语句。
-** TrimSqlNode：用于生成带有 trim 标签的动态 SQL 语句。
-** WhereSqlNode：用于生成带有 where 子句的动态 SQL 语句。
-** SetSqlNode：用于生成带有 set 标签的动态 SQL 语句。
-** ForEachSqlNode：用于生成带有 foreach 循环的动态 SQL 语句。
-** TextSqlNode：用于生成动态 SQL 语句的基本单元。
-** ChooseSqlNode：用于生成带有 choose 标签的动态 SQL 语句。
-** BindSqlNode：用于生成带有 bind 标签的动态 SQL 语句。
-** MixedSqlNode：用于将多个 SqlNode 对象组合在一起生成动态 SQL 语句。
-* org.apache.ibatis.scripting.xmltags.XMLScriptBuilder.NodeHandler：定义在 `XMLScriptBuilder` 内部的一个接口，用于处理 MyBatis 自定义标签（`<if />` `<foreach />`等），生成对应的 `SqlNode` 对象，不同的实现类处理不同的标签。一些常用的 `NodeHandler` 实现类如下：
-** IfHandler：该类处理 `IfSqlNode` 对象，用于在动态 SQL 中使用 "if", "when" 标签。
-** TrimHandler: 该类处理 `TrimSqlNode` 对象，用于在动态 SQL 中使用 "trim" 标签。
-** WhereHandler: 该类处理 `WhereSqlNode` 对象，用于在动态 SQL 中使用 "where" 标签。
-** ChooseHandler: 该类处理 `ChooseSqlNode` 对象，用于在动态 SQL 中使用 "choose" 标签。
-** SetHandler: 该类处理 `SetSqlNode` 对象，用于在动态 SQL 中使用 "set" 标签。
-** ForEachHandler: 该类处理 `ForEachSqlNode` 对象，用于在动态 SQL 中使用 "foreach" 标签。
-** OtherwiseHandler: 该类处理 `MixedSqlNode`。用于在动态 SQL 中使用 "otherwise" 标签。
-** BindHandler: 该类处理 `VarDeclSqlNode` 对象，用于在动态 SQL 中使用 "bind" 标签。
-* org.apache.ibatis.mapping.SqlSource：的作用是将 SQL 语句封装为可重用的对象，以便在执行数据库操作时使用。这样做可以提高代码的可重用性，同时也方便了对 SQL 语句的维护和管理。
-** DynamicSqlSource：动态 SQL 源，它可以根据传入的参数动态生成最终的 SQL 语句。
-** RawSqlSource：原始 SQL 源，它直接将 SQL 语句传递给 SqlSession，不进行任何额外的处理。
-** StaticSqlSource：静态 SQL 源，它预先将 SQL 语句处理成最终的形式，并在 `SqlSession` 使用时直接使用处理好的 SQL 语句。
-** ProviderSqlSource：它的作用是从实现了 SqlProvider 接口的类中动态生成 SQL 语句。当请求执行数据库操作时，MyBatis 会调用 SqlProvider 接口的方法，并将生成的 SQL 传递给 ProviderSqlSource。ProviderSqlSource 再负责将 SQL 传递给 SqlSession 执行。
-* org.apache.ibatis.scripting.xmltags.DynamicContext：解析动态 SQL 语句时的上下文，用于解析SQL时，记录动态SQL处理后的SQL语句，内部提供 ContextMap 对象保存上下文的参数
-* org.apache.ibatis.builder.SqlSourceBuilder：继承了 `BaseBuilder` 抽象类，`SqlSource` 构建器，负责将 SQL 语句中的 `#{}` 替换成相应的 `?` 占位符，并获取该 `?` 占位符对应的 `ParameterMapping` 对象
-* org.apache.ibatis.builder.ParameterExpression：继承了 `HashMap<String, String>`，参数表达式处理器，在 `SqlSourceBuilder` 处理 `#{}` 的内容时，需要通过其解析成 `key-value` 键值对.
-* org.apache.ibatis.mapping.ParameterMapping：保存 `#{}` 中配置的属性参数信息
-* org.apache.ibatis.mapping.BoundSql：用于数据库可执行的 SQL 语句的最终封装对象
-* org.apache.ibatis.scripting.defaults.DefaultParameterHandler：实现了 `ParameterHandler` 接口，用于将入参设置到 `java.sql.PreparedStatement` 预编译对象中
+include::command.adoc[leveloffset=+1]
+
+include::produccer.adoc[leveloffset=+1]
 
 
 
-include::init-mapping.adoc[]
 
-include::init-sql.adoc[]
 
-include::sql-parse.adoc[]
 
 
 
