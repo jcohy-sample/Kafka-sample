@@ -55,6 +55,8 @@ public class JcohyAsciidoctorPlugins implements Plugin<Project> {
          * :go-code: {rootProject}/src/main/go/com/jcohy/sample
          * :oss-images: https://study.jcohy.com/images
          */
+		attributes.put("Author"," Jcohy ");
+		attributes.put("email"," jia_chao23@126.com ");
         attributes.put("java-code", project.getRootProject().getProjectDir() + "/src/main/java/com/jcohy/sample");
         attributes.put("kotlin-code", project.getRootProject().getProjectDir() + "/src/main/kotlin/com/jcohy/sample");
         attributes.put("go-code", project.getRootProject().getProjectDir() + "/src/main/go/com/jcohy/sample");

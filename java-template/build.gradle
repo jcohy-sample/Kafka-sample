@@ -5,4 +5,5 @@ plugins {
 description = "Java Template Sample"
 
 dependencies {
+	implementation 'org.apache.kafka:kafka-clients:3.0.0'
 }

@@ -1,5 +1,5 @@
 [[kafka-producer]]
-= Kafka生产者
+= Kafka 生产者
 
 == 生产者消息发送流程
 
@@ -62,7 +62,7 @@ public class CustomProducer {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -84,7 +84,7 @@ public class CustomProducer {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server localhost:9092 --topic first
+jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
 jcohy 0
 jcohy 1
 jcohy 2
@@ -105,7 +105,7 @@ public class CustomProducerCallback {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -137,7 +137,7 @@ public class CustomProducerCallback {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server localhost:9092 --topic first
+jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
 jcohy 0
 jcohy 1
 jcohy 2
@@ -295,9 +295,9 @@ public class ProducerRecord<K, V> {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server localhost:9092 --create --partitions 3 --replication-factor 1 --topic sample-partition
+jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server cluster001:9092 --create --partitions 3 --replication-factor 1 --topic sample-partition
 Created topic sample-partition.
-jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server localhost:9092 --describe --topic sample-partition
+jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server cluster001:9092 --describe --topic sample-partition
 Topic: sample-partition TopicId: 87hiax0URsGpjxwd0wxPGg PartitionCount: 3       ReplicationFactor: 1    Configs:
         Topic: sample-partition Partition: 0    Leader: 0       Replicas: 0     Isr: 0
         Topic: sample-partition Partition: 1    Leader: 0       Replicas: 0     Isr: 0
@@ -314,7 +314,7 @@ public class CustomProducerCallbackPartitions {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -346,7 +346,7 @@ public class CustomProducerCallbackPartitions {
 +
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server localhost:9092 --topic sample-partition
+jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic sample-partition
 jcohy 0
 jcohy 1
 jcohy 2
@@ -374,7 +374,7 @@ public class CustomProducerCallbackWithKey {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -498,7 +498,7 @@ public class CustomProducerCallbackWithCustomPartition {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -573,7 +573,7 @@ public class CustomProducerParameters {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
@@ -658,7 +658,7 @@ properties.put(ProducerConfig.RETRIES_CONFIG,1);
 
 数据传递语义:
 
-* 至少一次(At Least Once)= ACK 级别设置为-1 +分区副本大于等于 2+ISR 里应答的最小副本数量大于等于 2
+* 至少一次(At Least Once)= ACK 级别设置为 -1 +分区副本大于等于 2+ISR 里应答的最小副本数量大于等于 2
 * 最多一次(At Most Once)= ACK 级别设置为 0
 
 * At Least Once 可以保证数据不丢失，但是不能保证数据不重复;
@@ -698,7 +698,7 @@ public class CustomProducerTransactions {
 		// 1. 创建 kafka 生产者的配置对象
 		Properties properties = new Properties();
 		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
-		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"localhost:9092");
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
 		// key,value 序列化
 		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
 		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
