@@ -29,8 +29,8 @@ public class CustomProducerCallback {
 		KafkaProducer<String,String> kafkaProducer = new KafkaProducer<>(properties);
 
 		// 4. 调用 send 方法,向 first 主题发送消息
-		for (int i = 0; i < 5; i++) {
-			kafkaProducer.send(new ProducerRecord<>("first","jcohy " + i),
+		for (int i = 0; i < 7; i++) {
+			kafkaProducer.send(new ProducerRecord<>("first",i,"test","jcohy " + i),
 					(metadata, exception) -> { // // 该方法在Producer收到ack时调用，为异步调用
 				if(exception == null) {
 					// 没有异常,输出信息到控制台
