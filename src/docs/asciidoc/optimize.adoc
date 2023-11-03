@@ -1,0 +1,615 @@
+[[kafka-optimize]]
+= 生产调优
+
+== Kafka 硬件配置选择
+
+100 万日活，每人每天 100 条日志，每天总共的日志条数是100 万 * 100 条 = 1 亿条。
+
+1 亿/24 小时/60 分/60 秒 = 1150 条/每秒钟。
+
+每条日志大小：0.5k - 2k（取 1k）。
+
+1150 条/每秒钟 * 1k ≈ 1m/s 。
+
+高峰期每秒钟：1150 条 * 20 倍 = 23000 条。
+
+每秒多少数据量：20MB/s。
+
+=== 服务器台数选择
+
+服务器台数= 2 * （生产者峰值生产速率 * 副本 / 100） + 1 = 2 * （20m/s * 2 / 100） + 1 = 3 台
+
+建议 3 台服务器。
+
+=== 磁盘选择
+
+kafka 底层主要是顺序写，固态硬盘和机械硬盘的顺序写速度差不多。
+
+建议选择普通的机械硬盘。
+
+每天总数据量：1 亿条 * 1k ≈ 100g
+
+100g * 副本 2 * 保存时间3 天 / 0.7 ≈ 1T
+
+建议三台服务器硬盘总大小，大于等于 1T。
+
+=== 内存选择
+
+Kafka 内存组成：堆内存 + 页缓存
+
+Kafka 堆内存建议每个节点：10g ~ 15g
+
+在 `kafka-server-start.sh` 中修改
+
+[source,shell]
+----
+if [ "x$KAFKA_HEAP_OPTS" = "x" ]; then
+export KAFKA_HEAP_OPTS="-Xmx10G -Xms10G"
+fi
+----
+
+查看 Kafka 进程号
+
+[source,shell]
+----
+[root@cluster001 ~]# jps
+15045 Jps
+32646 Kafka
+----
+
+根据 Kafka 进程号，查看 Kafka 的 GC 情况
+
+[source,shell]
+----
+[root@cluster001 ~]# jstat -gc 32646  1s 10
+ S0C    S1C    S0U    S1U      EC       EU        OC         OU       MC     MU    CCSC   CCSU   YGC     YGCT    FGC    FGCT    CGC    CGCT     GCT
+ 0.0   4096.0  0.0   4096.0 656384.0 617472.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 617472.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 617472.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 618496.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+ 0.0   4096.0  0.0   4096.0 656384.0 619520.0  388096.0   194423.8  58396.0 55183.6 7788.0 6376.6    180    1.626   0      0.000   6      0.014    1.641
+----
+
+参数说明
+
+* S0C：第一个幸存区的大小；
+* S1C：第二个幸存区的大小
+* S0U：第一个幸存区的使用大小；
+* S1U：第二个幸存区的使用大小
+* EC：伊甸园区的大小；
+* EU：伊甸园区的使用大小
+* OC：老年代大小；
+* OU：老年代使用大小
+* MC：方法区大小；
+* MU：方法区使用大小
+* CCSC:压缩类空间大小；
+* CCSU:压缩类空间使用大小
+* YGC：年轻代垃圾回收次数；
+* YGCT：年轻代垃圾回收消耗时间
+* FGC：老年代垃圾回收次数；
+* FGCT：老年代垃圾回收消耗时间
+* GCT：垃圾回收消耗总时间；
+
+页缓存：页缓存是Linux 系统服务器的内存。我们只需要保证1 个segment（1g）中 25% 的数据在内存中就好。
+
+每个节点页缓存大小 =（分区数 * 1g * 25%）/ 节点数。例如 10 个分区，页缓存大小 =（10 * 1g * 25%）/ 3 ≈ 1g
+
+建议服务器内存大于等于 11G。
+
+=== CPU 选择
+
+* num.io.threads = 8 负责写磁盘的线程数，整个参数值要占总核数的 50%。
+* num.replica.fetchers = 1 副本拉取线程数，这个参数占总核数的 50% 的 1/3。
+* num.network.threads = 3 数据传输线程数，这个参数占总核数的 50% 的 2/3。
+
+建议 32 个cpu core。
+
+=== 网络选择
+
+网络带宽 = 峰值吞吐量 ≈ 20MB/s 选择千兆网卡即可。
+
+100Mbps 单位是bit；10M/s 单位是byte ; 1byte = 8bit，100Mbps/8 = 12.5M/s。
+
+一般百兆的网卡（100Mbps ）、千兆的网卡（1000Mbps）、万兆的网卡（10000Mbps）。
+
+== Kafka 生产者
+
+=== 生产者如何提高吞吐量
+
+<<kafka-producer-qps>>
+
+=== 数据可靠性
+
+<<kafka-producer-reliability>>
+
+=== 数据去重
+
+<<kafka-producer-repeat>>
+
+=== 数据有序
+
+<<kafka-producer-order>>
+
+=== 数据乱序
+
+<<kafka-producer-disorder>>
+
+== Kafka Broker
+
+=== 服役新节点/退役旧节点
+
+<<kafka-broker-node>>
+
+=== 增加分区
+
+修改分区数（注意：分区数只能增加，不能减少）
+
+[source,shell]
+----
+[atguigu@hadoop102 kafka]$ bin/kafka-topics.sh --bootstrap-server
+hadoop102:9092 --alter --topic first --partitions 3
+----
+
+=== 增加副本因子
+
+<<kafka-broker-replication-add>>
+
+=== 手动调整分区副本存储
+
+<<kafka-broker-replication-multi>>
+
+=== Leader Partition 负载平衡
+
+<<kafka-broker-replication-leader-partition>>
+
+=== 自动创建主题
+
+如果 broker 端配置参数`` auto.create.topics.enable`` 设置为 `true` （默认值是 true），那么当生产者向一个未创建的主题发送消息时，会自动创建一个分区数为 `num.partitions`（默认值为 1）、副本因子为 `default.replication.factor`（默认值为 `1`）的主题。
+除此之外，当一个消费者开始从未知主题中读取消息时，或者当任意一个客户端向未知主题发送元数据请求时，都会自动创建一个相应主题。这种创建主题的方式是非预期的，增加了主题管理和维护的难度。
+
+生产环境建议将该参数设置为 `false`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-console-producer.sh --bootstrap-server cluster001:9092 --topic test100
+>hello world
+# 这里出现异常，是因为 kafka 创建一个 topic 是需要时间的，在这里还没有创建成功。我们需要等一会儿再发送数据。
+[2023-11-01 10:50:18,995] WARN [Producer clientId=console-producer] Error while fetching metadata with correlation id 4 : {test100=UNKNOWN_TOPIC_OR_PARTITION} (org.apache.kafka.clients.NetworkClient)
+[2023-11-01 10:50:19,088] WARN [Producer clientId=console-producer] Error while fetching metadata with correlation id 5 : {test100=UNKNOWN_TOPIC_OR_PARTITION} (org.apache.kafka.clients.NetworkClient)
+[2023-11-01 10:50:19,191] WARN [Producer clientId=console-producer] Error while fetching metadata with correlation id 6 : {test100=UNKNOWN_TOPIC_OR_PARTITION} (org.apache.kafka.clients.NetworkClient)
+>hello world
+>jjj
+>
+[root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --describe --topic test100
+Topic: test100  TopicId: 8eBP8pdDQoiGDkkSS79qog PartitionCount: 1       ReplicationFactor: 1    Configs: segment.bytes=1073741824
+        Topic: test100  Partition: 0    Leader: 2       Replicas: 2     Isr: 2
+----
+
+== Kafka 消费者
+
+=== 消费者再平衡
+
+<<kafka-consumer-balance>>
+
+=== 指定 Offset 消费
+
+<<kafka-consumer-offset-consumer>>
+
+=== 指定时间消费
+
+<<kafka-consumer-offset-time>>
+
+=== 消费者事务
+
+<<kafka-consumer-transation>>
+
+=== 消费者如何提高吞吐量
+
+<<kafka-consumer-qps>>
+
+== Kafka 总体
+
+=== 如何提升吞吐量
+
+. 提升生产吞吐量
+.. buffer.memory：发送消息的缓冲区大小，默认值是32m，可以增加到64m。
+.. batch.size：默认是 16k。如果 batch 设置太小，会导致频繁网络请求，吞吐量下降； 如果 batch 太大，会导致一条消息需要等待很久才能被发送出去，增加网络延时。
+.. linger.ms，这个值默认是 0，意思就是消息必须立即被发送。一般设置一个 5-100 毫秒。如果 linger.ms 设置的太小，会导致频繁网络请求，吞吐量下降；如果 linger.ms 太长，会导致一条消息需要等待很久才能被发送出去，增加网络延时。
+.. compression.type：默认是 none，不压缩，但是也可以使用 lz4 压缩，效率还是不错的，压缩之后可以减小数据量，提升吞吐量，但是会加大 producer 端的CPU 开销。
+. 增加分区
+. 消费者提高吞吐量
+.. 调整 fetch.max.bytes 大小，默认是 50m。
+.. 调整 max.poll.records 大小，默认是 500 条。
+. 增加下游消费者处理能力
+
+=== 数据精准一次
+
+. 生产者角度
+.. acks 设置为-1 （acks=-1）。
+.. 幂等性（enable.idempotence = true） + 事务 。
+. broker 服务端角度
+.. 分区副本大于等于 2 （--replication-factor 2）。
+.. ISR 里应答的最小副本数量大于等于 2 （min.insync.replicas = 2）。
+. 消费者
+.. 事务 + 手动提交 offset （enable.auto.commit = false）。
+.. 消费者输出的目的地必须支持事务（MySQL、Kafka）。
+
+=== 合理设置分区数
+
+. 创建一个只有 1 个分区的 topic。
+. 测试这个 topic 的 producer 吞吐量和 consumer 吞吐量。
+. 假设他们的值分别是 Tp 和 Tc，单位可以是 MB/s。
+. 然后假设总的目标吞吐量是 Tt，那么分区数 = Tt / min（Tp，Tc）。
+
+例如：producer 吞吐量 = 20m/s；consumer 吞吐量 = 50m/s，期望吞吐量 100m/s；
+
+分区数 = 100 / 20 = 5 分区
+
+分区数一般设置为：3-10 个
+
+分区数不是越多越好，也不是越少越好，需要搭建完集群，进行压测，再灵活调整分区个数。
+
+=== 单条日志大于 1m
+
+|===
+| 参数名称 | 描述
+
+| message.max.bytes
+| 默认 1m，broker 端接收每个批次消息最大值。
+
+| max.request.size
+| 默认 1m，生产者发往broker 每个请求消息最大值。针对 topic 级别设置消息体的大小。
+
+| replica.fetch.max.bytes
+| 默认 1m，副本同步数据，每个批次消息最大值。
+
+| fetch.max.bytes 默认Default: 52428800（50 m）。消费者获取服务器端一批消息最大的字节数。如果服务器端一批次的数据大于该值（50m）仍然可以拉取回来这批数据，因此，这不是一个绝对
+最大值。一批次的大小受message.max.bytes （broker config）or max.message.bytes （topic config）影响。
+|===
+
+=== 服务器挂了
+
+在生产环境中，如果某个 Kafka 节点挂掉。
+
+正常处理办法：
+
+* 先尝试重新启动一下，如果能启动正常，那直接解决。
+* 如果重启不行，考虑增加内存、增加 CPU、网络带宽。
+* 如果将 kafka 整个节点误删除，如果副本数大于等于 2，可以按照服役新节点的方式重新服役一个新节点，并执行负载均衡。
+
+=== 集群压力测试
+
+用 Kafka 官方自带的脚本，对 Kafka 进行压测。
+
+* 生产者压测：kafka-producer-perf-test.sh
+* 消费者压测：kafka-consumer-perf-test.sh
+
+==== Kafka Producer 压力测试
+
+创建一个 test topic，设置为 3 个分区 3 个副本
+
+* record-size 是一条信息有多大，单位是字节，本次测试设置为 `1k`。
+* num-records 是总共发送多少条信息，本次测试设置为 `100` 万条。
+* throughput 是每秒多少条信息，设成 `-1`，表示不限流，尽可能快的生产数据，可测出生产者最大吞吐量。本次实验设置为每秒钟 `1` 万条。
+* producer-props 后面可以配置生产者相关参数，`batch.size` 配置为 `16k`。
+
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --create --partitions 3 --replication-factor 3 --topic first
+Created topic first.
+
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=16384 linger.ms=0
+49897 records sent, 9977.4 records/sec (9.74 MB/sec), 109.4 ms avg latency, 868.0 ms max latency.
+50085 records sent, 10017.0 records/sec (9.78 MB/sec), 3.1 ms avg latency, 55.0 ms max latency.
+50022 records sent, 10004.4 records/sec (9.77 MB/sec), 2.8 ms avg latency, 18.0 ms max latency.
+50009 records sent, 10001.8 records/sec (9.77 MB/sec), 2.8 ms avg latency, 23.0 ms max latency.
+50024 records sent, 10004.8 records/sec (9.77 MB/sec), 2.7 ms avg latency, 13.0 ms max latency.
+50001 records sent, 10000.2 records/sec (9.77 MB/sec), 2.7 ms avg latency, 13.0 ms max latency.
+49999 records sent, 9999.8 records/sec (9.77 MB/sec), 2.7 ms avg latency, 17.0 ms max latency.
+50024 records sent, 10004.8 records/sec (9.77 MB/sec), 2.7 ms avg latency, 13.0 ms max latency.
+50004 records sent, 10000.8 records/sec (9.77 MB/sec), 2.8 ms avg latency, 16.0 ms max latency.
+50002 records sent, 9998.4 records/sec (9.76 MB/sec), 2.8 ms avg latency, 21.0 ms max latency.
+50012 records sent, 10002.4 records/sec (9.77 MB/sec), 2.8 ms avg latency, 16.0 ms max latency.
+49998 records sent, 9999.6 records/sec (9.77 MB/sec), 2.7 ms avg latency, 16.0 ms max latency.
+50009 records sent, 10001.8 records/sec (9.77 MB/sec), 2.9 ms avg latency, 17.0 ms max latency.
+50010 records sent, 10002.0 records/sec (9.77 MB/sec), 2.7 ms avg latency, 16.0 ms max latency.
+50017 records sent, 10003.4 records/sec (9.77 MB/sec), 2.7 ms avg latency, 16.0 ms max latency.
+50011 records sent, 10002.2 records/sec (9.77 MB/sec), 2.7 ms avg latency, 13.0 ms max latency.
+50005 records sent, 10001.0 records/sec (9.77 MB/sec), 2.7 ms avg latency, 15.0 ms max latency.
+50003 records sent, 10000.6 records/sec (9.77 MB/sec), 2.7 ms avg latency, 15.0 ms max latency.
+50014 records sent, 10002.8 records/sec (9.77 MB/sec), 2.8 ms avg latency, 13.0 ms max latency.
+1000000 records sent, 9998.200324 records/sec (9.76 MB/sec), 8.09 ms avg latency, 868.00 ms max latency, 2 ms 50th, 6 ms 95th, 235 ms 99th, 729 ms 99.9th.
+----
+
+1、调整 `batch.size` 大小，`batch.size` 默认值是 `16k`。本次实验 `batch.size` 设置为 `32k`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=32768 linger.ms=0
+49977 records sent, 9995.4 records/sec (9.76 MB/sec), 38.8 ms avg latency, 695.0 ms max latency.
+50009 records sent, 10001.8 records/sec (9.77 MB/sec), 2.9 ms avg latency, 31.0 ms max latency.
+49996 records sent, 9999.2 records/sec (9.76 MB/sec), 3.3 ms avg latency, 14.0 ms max latency.
+50014 records sent, 10002.8 records/sec (9.77 MB/sec), 3.6 ms avg latency, 17.0 ms max latency.
+50007 records sent, 9999.4 records/sec (9.77 MB/sec), 3.5 ms avg latency, 13.0 ms max latency.
+50032 records sent, 10006.4 records/sec (9.77 MB/sec), 3.6 ms avg latency, 16.0 ms max latency.
+50017 records sent, 10003.4 records/sec (9.77 MB/sec), 3.5 ms avg latency, 20.0 ms max latency.
+49996 records sent, 9999.2 records/sec (9.76 MB/sec), 3.6 ms avg latency, 16.0 ms max latency.
+50017 records sent, 10003.4 records/sec (9.77 MB/sec), 3.5 ms avg latency, 16.0 ms max latency.
+49984 records sent, 9996.8 records/sec (9.76 MB/sec), 3.5 ms avg latency, 16.0 ms max latency.
+50013 records sent, 10002.6 records/sec (9.77 MB/sec), 3.5 ms avg latency, 14.0 ms max latency.
+50019 records sent, 10003.8 records/sec (9.77 MB/sec), 3.5 ms avg latency, 15.0 ms max latency.
+50027 records sent, 10005.4 records/sec (9.77 MB/sec), 3.5 ms avg latency, 15.0 ms max latency.
+49995 records sent, 9999.0 records/sec (9.76 MB/sec), 3.4 ms avg latency, 12.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 3.4 ms avg latency, 14.0 ms max latency.
+49984 records sent, 9996.8 records/sec (9.76 MB/sec), 3.5 ms avg latency, 19.0 ms max latency.
+50027 records sent, 10005.4 records/sec (9.77 MB/sec), 3.5 ms avg latency, 16.0 ms max latency.
+49978 records sent, 9995.6 records/sec (9.76 MB/sec), 3.4 ms avg latency, 15.0 ms max latency.
+50016 records sent, 10003.2 records/sec (9.77 MB/sec), 3.6 ms avg latency, 17.0 ms max latency.
+1000000 records sent, 9997.800484 records/sec (9.76 MB/sec), 5.22 ms avg latency, 695.00 ms max latency, 3 ms 50th, 6 ms 95th, 36 ms 99th, 302 ms 99.9th.
+----
+
+2、`batch.size` 默认值是 `16k`。本次实验 `batch.size` 设置为 `4k`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=0
+26239 records sent, 5247.8 records/sec (5.12 MB/sec), 1526.4 ms avg latency, 2473.0 ms max latency.
+41496 records sent, 8299.2 records/sec (8.10 MB/sec), 2874.4 ms avg latency, 3281.0 ms max latency.
+46074 records sent, 9214.8 records/sec (9.00 MB/sec), 2623.6 ms avg latency, 2816.0 ms max latency.
+44727 records sent, 8945.4 records/sec (8.74 MB/sec), 2765.0 ms avg latency, 3055.0 ms max latency.
+47097 records sent, 9419.4 records/sec (9.20 MB/sec), 2635.5 ms avg latency, 3024.0 ms max latency.
+46719 records sent, 9343.8 records/sec (9.12 MB/sec), 2614.5 ms avg latency, 2922.0 ms max latency.
+45189 records sent, 9037.8 records/sec (8.83 MB/sec), 2690.2 ms avg latency, 3035.0 ms max latency.
+45111 records sent, 9022.2 records/sec (8.81 MB/sec), 2726.8 ms avg latency, 3024.0 ms max latency.
+43680 records sent, 8736.0 records/sec (8.53 MB/sec), 2728.0 ms avg latency, 3049.0 ms max latency.
+39594 records sent, 7918.8 records/sec (7.73 MB/sec), 3159.1 ms avg latency, 3501.0 ms max latency.
+42522 records sent, 8504.4 records/sec (8.31 MB/sec), 2889.9 ms avg latency, 3173.0 ms max latency.
+45099 records sent, 9019.8 records/sec (8.81 MB/sec), 2748.6 ms avg latency, 3133.0 ms max latency.
+44247 records sent, 8849.4 records/sec (8.64 MB/sec), 2768.1 ms avg latency, 3096.0 ms max latency.
+43236 records sent, 8647.2 records/sec (8.44 MB/sec), 2838.9 ms avg latency, 3097.0 ms max latency.
+43563 records sent, 8712.6 records/sec (8.51 MB/sec), 2818.5 ms avg latency, 2944.0 ms max latency.
+40470 records sent, 8077.8 records/sec (7.89 MB/sec), 2934.5 ms avg latency, 3140.0 ms max latency.
+42789 records sent, 8557.8 records/sec (8.36 MB/sec), 2997.3 ms avg latency, 3255.0 ms max latency.
+44487 records sent, 8897.4 records/sec (8.69 MB/sec), 2744.0 ms avg latency, 3061.0 ms max latency.
+43053 records sent, 8610.6 records/sec (8.41 MB/sec), 2850.8 ms avg latency, 3066.0 ms max latency.
+43098 records sent, 8619.6 records/sec (8.42 MB/sec), 2869.4 ms avg latency, 3056.0 ms max latency.
+43287 records sent, 8657.4 records/sec (8.45 MB/sec), 2843.2 ms avg latency, 3019.0 ms max latency.
+41880 records sent, 8376.0 records/sec (8.18 MB/sec), 2900.2 ms avg latency, 3147.0 ms max latency.
+43887 records sent, 8777.4 records/sec (8.57 MB/sec), 2831.2 ms avg latency, 3079.0 ms max latency.
+1000000 records sent, 8583.690987 records/sec (8.38 MB/sec), 2772.22 ms avg latency, 3501.00 ms max latency, 2807 ms 50th, 3137 ms 95th, 3335 ms 99th, 3486 ms 99.9th.
+----
+
+3、调整 `linger.ms` 时间。`linger.ms` 默认是 `0ms`。本次实验 `linger.ms` 设置为 `50ms`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50
+27982 records sent, 5596.4 records/sec (5.47 MB/sec), 1524.7 ms avg latency, 2486.0 ms max latency.
+37734 records sent, 7546.8 records/sec (7.37 MB/sec), 2812.6 ms avg latency, 3335.0 ms max latency.
+43851 records sent, 8770.2 records/sec (8.56 MB/sec), 2930.8 ms avg latency, 3313.0 ms max latency.
+42270 records sent, 8454.0 records/sec (8.26 MB/sec), 2852.2 ms avg latency, 3156.0 ms max latency.
+42873 records sent, 8574.6 records/sec (8.37 MB/sec), 2909.5 ms avg latency, 3141.0 ms max latency.
+43626 records sent, 8725.2 records/sec (8.52 MB/sec), 2798.5 ms avg latency, 2994.0 ms max latency.
+42717 records sent, 8543.4 records/sec (8.34 MB/sec), 2878.8 ms avg latency, 2987.0 ms max latency.
+41601 records sent, 8320.2 records/sec (8.13 MB/sec), 2939.3 ms avg latency, 3077.0 ms max latency.
+41586 records sent, 8317.2 records/sec (8.12 MB/sec), 2977.4 ms avg latency, 3351.0 ms max latency.
+42492 records sent, 8498.4 records/sec (8.30 MB/sec), 2883.2 ms avg latency, 3241.0 ms max latency.
+42039 records sent, 8407.8 records/sec (8.21 MB/sec), 2913.2 ms avg latency, 3094.0 ms max latency.
+43941 records sent, 8788.2 records/sec (8.58 MB/sec), 2819.9 ms avg latency, 3087.0 ms max latency.
+42708 records sent, 8541.6 records/sec (8.34 MB/sec), 2868.3 ms avg latency, 3019.0 ms max latency.
+42099 records sent, 8419.8 records/sec (8.22 MB/sec), 2909.3 ms avg latency, 3107.0 ms max latency.
+43176 records sent, 8635.2 records/sec (8.43 MB/sec), 2850.7 ms avg latency, 3042.0 ms max latency.
+41013 records sent, 8202.6 records/sec (8.01 MB/sec), 2918.3 ms avg latency, 3193.0 ms max latency.
+42366 records sent, 8473.2 records/sec (8.27 MB/sec), 2968.9 ms avg latency, 3235.0 ms max latency.
+43194 records sent, 8638.8 records/sec (8.44 MB/sec), 2864.7 ms avg latency, 3056.0 ms max latency.
+42426 records sent, 8485.2 records/sec (8.29 MB/sec), 2876.3 ms avg latency, 3056.0 ms max latency.
+39672 records sent, 7932.8 records/sec (7.75 MB/sec), 2965.4 ms avg latency, 3427.0 ms max latency.
+44613 records sent, 8922.6 records/sec (8.71 MB/sec), 2921.3 ms avg latency, 3506.0 ms max latency.
+42855 records sent, 8571.0 records/sec (8.37 MB/sec), 2832.9 ms avg latency, 3044.0 ms max latency.
+42873 records sent, 8574.6 records/sec (8.37 MB/sec), 2869.7 ms avg latency, 3035.0 ms max latency.
+1000000 records sent, 8351.009637 records/sec (8.16 MB/sec), 2848.14 ms avg latency, 3506.00 ms max latency, 2878 ms 50th, 3162 ms 95th, 3340 ms 99th, 3489 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+4、调整压缩方式。默认的压缩方式是 `none`。本次实验 `compression.type` 设置为 `snappy`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50 compression.type=snappy
+22249 records sent, 4449.8 records/sec (4.35 MB/sec), 1909.7 ms avg latency, 3274.0 ms max latency.
+39726 records sent, 7945.2 records/sec (7.76 MB/sec), 3162.4 ms avg latency, 3975.0 ms max latency.
+43317 records sent, 8663.4 records/sec (8.46 MB/sec), 2813.5 ms avg latency, 3087.0 ms max latency.
+42498 records sent, 8499.6 records/sec (8.30 MB/sec), 2876.2 ms avg latency, 3048.0 ms max latency.
+41286 records sent, 8257.2 records/sec (8.06 MB/sec), 2979.7 ms avg latency, 3117.0 ms max latency.
+41778 records sent, 8355.6 records/sec (8.16 MB/sec), 2956.2 ms avg latency, 3077.0 ms max latency.
+41709 records sent, 8341.8 records/sec (8.15 MB/sec), 2935.5 ms avg latency, 3078.0 ms max latency.
+43440 records sent, 8688.0 records/sec (8.48 MB/sec), 2858.3 ms avg latency, 3023.0 ms max latency.
+43455 records sent, 8691.0 records/sec (8.49 MB/sec), 2826.8 ms avg latency, 3129.0 ms max latency.
+42108 records sent, 8421.6 records/sec (8.22 MB/sec), 2904.8 ms avg latency, 3035.0 ms max latency.
+41913 records sent, 8382.6 records/sec (8.19 MB/sec), 2934.7 ms avg latency, 3108.0 ms max latency.
+41784 records sent, 8356.8 records/sec (8.16 MB/sec), 2970.8 ms avg latency, 3221.0 ms max latency.
+43314 records sent, 8662.8 records/sec (8.46 MB/sec), 2819.1 ms avg latency, 3048.0 ms max latency.
+43680 records sent, 8736.0 records/sec (8.53 MB/sec), 2803.4 ms avg latency, 3038.0 ms max latency.
+38772 records sent, 7752.8 records/sec (7.57 MB/sec), 3006.0 ms avg latency, 3406.0 ms max latency.
+39075 records sent, 7815.0 records/sec (7.63 MB/sec), 3274.6 ms avg latency, 3621.0 ms max latency.
+41970 records sent, 8394.0 records/sec (8.20 MB/sec), 2921.9 ms avg latency, 3181.0 ms max latency.
+42450 records sent, 8490.0 records/sec (8.29 MB/sec), 2943.4 ms avg latency, 3085.0 ms max latency.
+42573 records sent, 8514.6 records/sec (8.32 MB/sec), 2873.7 ms avg latency, 3024.0 ms max latency.
+45672 records sent, 9134.4 records/sec (8.92 MB/sec), 2734.7 ms avg latency, 2945.0 ms max latency.
+42666 records sent, 8524.7 records/sec (8.32 MB/sec), 2836.2 ms avg latency, 3003.0 ms max latency.
+43074 records sent, 8614.8 records/sec (8.41 MB/sec), 2850.6 ms avg latency, 3061.0 ms max latency.
+42789 records sent, 8557.8 records/sec (8.36 MB/sec), 2877.5 ms avg latency, 3052.0 ms max latency.
+41073 records sent, 8214.6 records/sec (8.02 MB/sec), 2994.1 ms avg latency, 3242.0 ms max latency.
+1000000 records sent, 8263.779853 records/sec (8.07 MB/sec), 2893.48 ms avg latency, 3975.00 ms max latency, 2902 ms 50th, 3207 ms 95th, 3508 ms 99th, 3922 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+5、默认的压缩方式是 `none`。本次实验 `compression.type` 设置为 `zstd`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50 compression.type=zstd
+48041 records sent, 9608.2 records/sec (9.38 MB/sec), 588.0 ms avg latency, 1074.0 ms max latency.
+51940 records sent, 10388.0 records/sec (10.14 MB/sec), 23.5 ms avg latency, 240.0 ms max latency.
+49995 records sent, 9999.0 records/sec (9.76 MB/sec), 3.6 ms avg latency, 27.0 ms max latency.
+50020 records sent, 10004.0 records/sec (9.77 MB/sec), 3.8 ms avg latency, 26.0 ms max latency.
+49970 records sent, 9994.0 records/sec (9.76 MB/sec), 4.4 ms avg latency, 23.0 ms max latency.
+50045 records sent, 10009.0 records/sec (9.77 MB/sec), 4.3 ms avg latency, 25.0 ms max latency.
+50015 records sent, 10003.0 records/sec (9.77 MB/sec), 3.5 ms avg latency, 15.0 ms max latency.
+49985 records sent, 9997.0 records/sec (9.76 MB/sec), 3.8 ms avg latency, 23.0 ms max latency.
+50005 records sent, 10001.0 records/sec (9.77 MB/sec), 3.4 ms avg latency, 23.0 ms max latency.
+50030 records sent, 10006.0 records/sec (9.77 MB/sec), 3.6 ms avg latency, 23.0 ms max latency.
+49995 records sent, 9999.0 records/sec (9.76 MB/sec), 3.6 ms avg latency, 23.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 3.7 ms avg latency, 26.0 ms max latency.
+50005 records sent, 10001.0 records/sec (9.77 MB/sec), 3.4 ms avg latency, 17.0 ms max latency.
+49990 records sent, 9998.0 records/sec (9.76 MB/sec), 3.8 ms avg latency, 27.0 ms max latency.
+50025 records sent, 10005.0 records/sec (9.77 MB/sec), 3.6 ms avg latency, 24.0 ms max latency.
+49990 records sent, 9998.0 records/sec (9.76 MB/sec), 3.7 ms avg latency, 24.0 ms max latency.
+50020 records sent, 10004.0 records/sec (9.77 MB/sec), 4.5 ms avg latency, 28.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 3.4 ms avg latency, 21.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 3.9 ms avg latency, 25.0 ms max latency.
+1000000 records sent, 9998.300289 records/sec (9.76 MB/sec), 32.85 ms avg latency, 1074.00 ms max latency, 3 ms 50th, 156 ms 95th, 801 ms 99th, 1007 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+6、默认的压缩方式是 `none`。本次实验 `compression.type` 设置为 `gzip`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50 compression.type=gzip
+44635 records sent, 8927.0 records/sec (8.72 MB/sec), 759.9 ms avg latency, 1126.0 ms max latency.
+55325 records sent, 11065.0 records/sec (10.81 MB/sec), 138.0 ms avg latency, 655.0 ms max latency.
+50030 records sent, 10004.0 records/sec (9.77 MB/sec), 4.3 ms avg latency, 26.0 ms max latency.
+50015 records sent, 10003.0 records/sec (9.77 MB/sec), 4.0 ms avg latency, 22.0 ms max latency.
+49995 records sent, 9999.0 records/sec (9.76 MB/sec), 5.4 ms avg latency, 43.0 ms max latency.
+50005 records sent, 9999.0 records/sec (9.76 MB/sec), 3.9 ms avg latency, 23.0 ms max latency.
+49995 records sent, 9999.0 records/sec (9.76 MB/sec), 4.2 ms avg latency, 35.0 ms max latency.
+50005 records sent, 9999.0 records/sec (9.76 MB/sec), 3.9 ms avg latency, 22.0 ms max latency.
+50030 records sent, 10006.0 records/sec (9.77 MB/sec), 3.9 ms avg latency, 26.0 ms max latency.
+50005 records sent, 10001.0 records/sec (9.77 MB/sec), 3.9 ms avg latency, 25.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 5.0 ms avg latency, 35.0 ms max latency.
+50015 records sent, 10003.0 records/sec (9.77 MB/sec), 4.0 ms avg latency, 28.0 ms max latency.
+50015 records sent, 10003.0 records/sec (9.77 MB/sec), 4.2 ms avg latency, 26.0 ms max latency.
+50000 records sent, 10000.0 records/sec (9.77 MB/sec), 4.7 ms avg latency, 29.0 ms max latency.
+50010 records sent, 10000.0 records/sec (9.77 MB/sec), 4.2 ms avg latency, 36.0 ms max latency.
+49970 records sent, 9994.0 records/sec (9.76 MB/sec), 4.6 ms avg latency, 86.0 ms max latency.
+49965 records sent, 9993.0 records/sec (9.76 MB/sec), 4.3 ms avg latency, 24.0 ms max latency.
+50075 records sent, 10015.0 records/sec (9.78 MB/sec), 3.8 ms avg latency, 29.0 ms max latency.
+50005 records sent, 10001.0 records/sec (9.77 MB/sec), 4.1 ms avg latency, 25.0 ms max latency.
+1000000 records sent, 9997.800484 records/sec (9.76 MB/sec), 45.40 ms avg latency, 1126.00 ms max latency, 4 ms 50th, 389 ms 95th, 914 ms 99th, 1085 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+7、默认的压缩方式是 `none`。本次实验 `compression.type` 设置为 `lz4`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50 compression.type=lz4
+29242 records sent, 5848.4 records/sec (5.71 MB/sec), 1481.0 ms avg latency, 2149.0 ms max latency.
+38922 records sent, 7784.4 records/sec (7.60 MB/sec), 2669.4 ms avg latency, 3297.0 ms max latency.
+43749 records sent, 8749.8 records/sec (8.54 MB/sec), 2915.9 ms avg latency, 3277.0 ms max latency.
+41754 records sent, 8350.8 records/sec (8.16 MB/sec), 2922.5 ms avg latency, 3214.0 ms max latency.
+42462 records sent, 8492.4 records/sec (8.29 MB/sec), 2836.0 ms avg latency, 3085.0 ms max latency.
+41559 records sent, 8311.8 records/sec (8.12 MB/sec), 2966.4 ms avg latency, 3118.0 ms max latency.
+42039 records sent, 8407.8 records/sec (8.21 MB/sec), 2954.4 ms avg latency, 3139.0 ms max latency.
+42567 records sent, 8513.4 records/sec (8.31 MB/sec), 2854.9 ms avg latency, 3110.0 ms max latency.
+41667 records sent, 8333.4 records/sec (8.14 MB/sec), 2959.9 ms avg latency, 3148.0 ms max latency.
+41811 records sent, 8362.2 records/sec (8.17 MB/sec), 2959.0 ms avg latency, 3104.0 ms max latency.
+41181 records sent, 8236.2 records/sec (8.04 MB/sec), 2930.3 ms avg latency, 3048.0 ms max latency.
+41571 records sent, 8314.2 records/sec (8.12 MB/sec), 3003.9 ms avg latency, 3096.0 ms max latency.
+40968 records sent, 8193.6 records/sec (8.00 MB/sec), 2975.3 ms avg latency, 3112.0 ms max latency.
+42696 records sent, 8539.2 records/sec (8.34 MB/sec), 2900.7 ms avg latency, 3021.0 ms max latency.
+43176 records sent, 8635.2 records/sec (8.43 MB/sec), 2898.9 ms avg latency, 3224.0 ms max latency.
+40743 records sent, 8148.6 records/sec (7.96 MB/sec), 2936.7 ms avg latency, 3076.0 ms max latency.
+41556 records sent, 8311.2 records/sec (8.12 MB/sec), 2955.1 ms avg latency, 3063.0 ms max latency.
+42480 records sent, 8496.0 records/sec (8.30 MB/sec), 2931.8 ms avg latency, 3091.0 ms max latency.
+42225 records sent, 8445.0 records/sec (8.25 MB/sec), 2880.4 ms avg latency, 3106.0 ms max latency.
+40659 records sent, 8131.8 records/sec (7.94 MB/sec), 2987.7 ms avg latency, 3094.0 ms max latency.
+40911 records sent, 8182.2 records/sec (7.99 MB/sec), 3024.2 ms avg latency, 3133.0 ms max latency.
+42957 records sent, 8591.4 records/sec (8.39 MB/sec), 2901.9 ms avg latency, 3169.0 ms max latency.
+41667 records sent, 8333.4 records/sec (8.14 MB/sec), 2918.7 ms avg latency, 3095.0 ms max latency.
+41700 records sent, 8340.0 records/sec (8.14 MB/sec), 2970.0 ms avg latency, 3111.0 ms max latency.
+1000000 records sent, 8252.118731 records/sec (8.06 MB/sec), 2881.52 ms avg latency, 3297.00 ms max latency, 2959 ms 50th, 3091 ms 95th, 3201 ms 99th, 3266 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+8、调整缓存大小。默认生产者端缓存大小 `32m`。本次实验 `buffer.memory` 设置为 `64m`。
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-producer-perf-test.sh --topic first  --record-size 1024 --num-record 1000000 --throughput 10000 --producer-props bootstrap.servers=cluster001:9092,cluster002:9092,cluster003:9092 batch.size=4096 linger.ms=50 buffer.memory=67108864
+27502 records sent, 5499.3 records/sec (5.37 MB/sec), 1574.0 ms avg latency, 2433.0 ms max latency.
+41520 records sent, 8304.0 records/sec (8.11 MB/sec), 2751.4 ms avg latency, 3152.0 ms max latency.
+43050 records sent, 8610.0 records/sec (8.41 MB/sec), 3406.5 ms avg latency, 3859.0 ms max latency.
+41247 records sent, 8249.4 records/sec (8.06 MB/sec), 4324.2 ms avg latency, 4705.0 ms max latency.
+44400 records sent, 8880.0 records/sec (8.67 MB/sec), 4982.3 ms avg latency, 5418.0 ms max latency.
+43785 records sent, 8757.0 records/sec (8.55 MB/sec), 5448.9 ms avg latency, 5832.0 ms max latency.
+43644 records sent, 8725.3 records/sec (8.52 MB/sec), 5629.8 ms avg latency, 5823.0 ms max latency.
+43917 records sent, 8783.4 records/sec (8.58 MB/sec), 5630.3 ms avg latency, 5852.0 ms max latency.
+43587 records sent, 8717.4 records/sec (8.51 MB/sec), 5608.4 ms avg latency, 5931.0 ms max latency.
+43734 records sent, 8746.8 records/sec (8.54 MB/sec), 5623.4 ms avg latency, 5924.0 ms max latency.
+43971 records sent, 8794.2 records/sec (8.59 MB/sec), 5609.3 ms avg latency, 5789.0 ms max latency.
+45126 records sent, 9025.2 records/sec (8.81 MB/sec), 5550.9 ms avg latency, 5692.0 ms max latency.
+44625 records sent, 8925.0 records/sec (8.72 MB/sec), 5424.7 ms avg latency, 5778.0 ms max latency.
+43464 records sent, 8692.8 records/sec (8.49 MB/sec), 5585.0 ms avg latency, 5821.0 ms max latency.
+41988 records sent, 8397.6 records/sec (8.20 MB/sec), 5749.9 ms avg latency, 5949.0 ms max latency.
+42957 records sent, 8591.4 records/sec (8.39 MB/sec), 5811.0 ms avg latency, 5936.0 ms max latency.
+43440 records sent, 8688.0 records/sec (8.48 MB/sec), 5679.7 ms avg latency, 5884.0 ms max latency.
+45444 records sent, 9088.8 records/sec (8.88 MB/sec), 5599.4 ms avg latency, 5939.0 ms max latency.
+43788 records sent, 8757.6 records/sec (8.55 MB/sec), 5457.3 ms avg latency, 5697.0 ms max latency.
+43077 records sent, 8615.4 records/sec (8.41 MB/sec), 5620.1 ms avg latency, 5796.0 ms max latency.
+42882 records sent, 8576.4 records/sec (8.38 MB/sec), 5747.2 ms avg latency, 5929.0 ms max latency.
+44325 records sent, 8865.0 records/sec (8.66 MB/sec), 5660.5 ms avg latency, 5969.0 ms max latency.
+45261 records sent, 9052.2 records/sec (8.84 MB/sec), 5407.6 ms avg latency, 5795.0 ms max latency.
+1000000 records sent, 8570.963291 records/sec (8.37 MB/sec), 5195.74 ms avg latency, 5969.00 ms max latency, 5584 ms 50th, 5866 ms 95th, 5923 ms 99th, 5958 ms 99.9th.
+[root@cluster001 ~]#
+----
+
+==== Kafka Consumer 压力测试
+
+参数说明：
+
+* --bootstrap-server 指定 Kafka 集群地址
+* --topic 指定 topic 的名称
+* --messages 总共要消费的消息个数。本次实验 100 万条。
+
+修改 `consumer.properties` 文件中的一次拉取条数为 `500`
+
+[source,shell]
+----
+max.poll.records=2000
+----
+
+1、消费 100 万条日志进行压测
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-consumer-perf-test.sh --bootstrap-server cluster001:9092,cluster002:9092,cluster003:9092 --topic first --messages 1000000 --consumer.config /usr/loc
+al/kafka/config/consumer.properties
+start.time, end.time, data.consumed.in.MB, MB.sec, data.consumed.in.nMsg, nMsg.sec, rebalance.time.ms, fetch.time.ms, fetch.MB.sec, fetch.nMsg.sec
+2023-11-01 11:59:28:972, 2023-11-01 11:59:38:053, 976.7061, 107.5549, 1000147, 110136.2185, 5079, 4002, 244.0545, 249911.7941
+----
+
+2、一次拉取条数为 `2000` ,修改 `consumer.properties` 文件 `max.poll.records` 设置为 `2000`
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-consumer-perf-test.sh --bootstrap-server cluster001:9092,cluster002:9092,cluster003:9092 --topic first --messages 1000000 --consumer.config /usr/local/kafka/config/consumer.properties
+start.time, end.time, data.consumed.in.MB, MB.sec, data.consumed.in.nMsg, nMsg.sec, rebalance.time.ms, fetch.time.ms, fetch.MB.sec, fetch.nMsg.sec
+2023-11-01 12:01:07:641, 2023-11-01 12:01:14:932, 978.0967, 134.1512, 1001571, 137370.8682, 3679, 3612, 270.7909, 277289.8671
+----
+
+3、调整 `fetch.max.bytes` 大小为 `100m`。修改 `consumer.properties` 文件。`fetch.max.bytes 设置为 104857600`
+
+[source,shell]
+----
+[root@cluster001 ~]# kafka-consumer-perf-test.sh --bootstrap-server cluster001:9092,cluster002:9092,cluster003:9092 --topic first --messages 1000000 --consumer.config /usr/local/kafka/config/consumer.properties
+start.time, end.time, data.consumed.in.MB, MB.sec, data.consumed.in.nMsg, nMsg.sec, rebalance.time.ms, fetch.time.ms, fetch.MB.sec, fetch.nMsg.sec
+2023-11-01 12:03:14:574, 2023-11-01 12:03:21:565, 977.2344, 139.7846, 1000688, 143139.4650, 3726, 3265, 299.3061, 306489.4334
+----

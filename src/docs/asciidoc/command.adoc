@@ -39,13 +39,13 @@
 | 更新系统默认的配置。
 |===
 
-. 查看操作主题命令参数
+.查看操作主题命令参数
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --list
 ----
 
-. 创建 first topic
+.创建 first topic
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --create --partitions 1 --replication-factor 1 --topic first
@@ -54,7 +54,7 @@ Created topic first.
 first
 ----
 
-. 查看 first 主题的详情
+.查看 first 主题的详情
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --describe --topic first
@@ -63,7 +63,7 @@ Topic: first    TopicId: iM7SgyC3Rj-dUqhvEL0Z6A PartitionCount: 1       Replicat
 [root@cluster001 ~]#
 ----
 
-. 修改分区数(注意:分区数只能增加，不能减少)
+.修改分区数(注意:分区数只能增加，不能减少)
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --alter --topic first --partitions 3
@@ -75,7 +75,7 @@ Topic: first    TopicId: iM7SgyC3Rj-dUqhvEL0Z6A PartitionCount: 3       Replicat
 [root@cluster001 ~]#
 ----
 
-. 删除 topic
+.删除 topic
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --delete --topic first
@@ -97,7 +97,7 @@ Topic: first    TopicId: iM7SgyC3Rj-dUqhvEL0Z6A PartitionCount: 3       Replicat
 |===
 
 
-. 发送消息
+.发送消息
 [source,shell]
 ----
 # 创建 topic 主题
@@ -132,7 +132,7 @@ Topic: first    TopicId: zLcHHfOOQEG0EGmKLk6Bow PartitionCount: 3       Replicat
 | 指定消费者组名称。
 |===
 
-. 消费 first 主题中的数据。只有当生产者生产数据后才能接收到
+.消费 first 主题中的数据。只有当生产者生产数据后才能接收到
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-console-consumer.sh --bootstrap-server cluster001:9092 --topic first
@@ -144,7 +144,7 @@ Topic: first    TopicId: zLcHHfOOQEG0EGmKLk6Bow PartitionCount: 3       Replicat
 Jcohy!Hello
 ----
 
-. 把主题中所有的数据都读取出来(包括历史数据)。
+.把主题中所有的数据都读取出来(包括历史数据)。
 [source,shell]
 ----
 [root@cluster001 ~]# kafka-console-consumer.sh --bootstrap-server cluster001:9092 --topic first --from-beginning

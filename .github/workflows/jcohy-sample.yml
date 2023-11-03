@@ -1,12 +1,12 @@
 # This workflow will build a Java project with Gradle
 # For more information see: https://help.github.com/actions/language-and-framework-guides/building-and-testing-java-with-gradle
 
-name: Jcohy-Study CI with Gradle
+name: Jcohy-Sample CI with Gradle
 
 on:
   push:
     branches:
-    - main
+      - main
 
 permissions: read-all
 
@@ -24,7 +24,7 @@ jobs:
         uses: gradle/wrapper-validation-action@ccb4328a959376b642e027874838f60f8e596de3
       - name: Upload To AliOSS
         uses: gradle/gradle-build-action@749f47bda3e44aa060e82d7b3ef7e40d953bd629
-        with: 
+        with:
           arguments: uploadOssFiles -x asciidoctorPdf
         env:
           ACCESS_KEY: ${{ secrets.ACCESS_KEY }}

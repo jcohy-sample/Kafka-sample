@@ -41,7 +41,7 @@ Kafka 最新定义：Kafka 是一个开源的分布式事件流平台，被数�
 
 === Kafka 基础架构
 
-image::img/kafka.jpg[]
+image::{oss-images}/kafka.jpg[]
 
 * Producer: 消息生产者，就是向 Kafka broker 中发送消息的客户端
 * Consumer：消息消费者，就是向 Kafka broker 中取消息的客户端

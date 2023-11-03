@@ -1,0 +1,1167 @@
+[[kafka-consumer]]
+= Kafka 消费者
+
+== 消费者工作流程
+
+=== 消费者总体工作流程
+
+image::{oss-images}/kafka-consumer.jpg[]
+
+* 一个消费者可以消费多个分区数据
+* 每个分区的数据只能由消费者组中一个消费者消费
+* 每个消费者的 offset 由消费者提交到系统主题保存
+
+=== 消费者组原理
+
+image::{oss-images}/kafka-consumer-group.svg[]
+
+Consumer Group（CG）：消费者组，由多个 consumer 组成。形成一个消费者组的条件，是所有消费者的 groupid 相同。
+
+* 消费者组内每个消费者负责消费不同分区的数据，一个分区只能由一个组内消费者消费。
+* 消费者组之间互不影响。所有的消费者都属于某个消费者组，即消费者组是逻辑上的一个订阅者。
+* 如果向消费组中添加更多的消费者，超过主题分区数量，则有一部分消费者就会闲置，不会接收任何消息。
+* 消费者组之间互不影响。所有的消费者都属于某个消费者组，即消费者组是逻辑上的一个订阅者。
+
+==== 消费者组初始化流程
+
+image::{oss-images}/kafka-consumer-coordinator.jpg[]
+
+coordinator：辅助实现消费者组的初始化和分区的分配。
+
+coordinator节点选择 = groupid的hashcode值 % 50（ `__consumer_offsets__` 的分区数量）.
+
+例如： groupid 的 hashcode 值 = 1，1% 50 = 1，那么 `__consumer_offsets__` 主题的1号分区，在哪个 broker 上，就选择这个节点的 coordinator
+作为这个消费者组的老大。消费者组下的所有的消费者提交 offset 的时候就往这个分区去提交 offset。
+
+. 每个 consumer 都发送 JoinGroup 请求
+. 选出一个 consumer 作为 leader
+. 把要消费的 topic 情况发送给 leader 消费者
+. leader 会负责制定消费方案
+. 把消费方案发给 coordinator
+. coordinator 就把消费方案下发给各个 consumer
+. 每个消费者都会和 coordinator 保持心跳（默认3s），一旦超时（`session.timeout.ms=45s`），该消费者会被移除，并触发再平衡；
+或者消费者处理消息的时间过长（`max.poll.interval.ms5分钟`），也会触发再平衡
+
+==== 消费者组详细消费流程
+
+image::{oss-images}/kafka-consumer-consumer.jpg[]
+
+. 创建消费者网络连接客户端 `ConsumerNetworkClient`
+. sendFetches 发送消费请求
+.. Fetch.min.bytes每批次最小抓取大小，默认 1 字节
+.. Fetch.max.wait.ms一批数据最小值未达到的超时时间，默认 500ms
+.. Fetch.max.bytes每批次最大抓取大小，默认 50m
+. 调用 send 方法发送请求，回调 `completedFetches`,放入队列中
+. 消费者从队列中拉取数据
+.. FetchedRecords 从队列中抓取数据
+.. Max.poll.records 一次拉取数据返回消息的最大条数，默认 500 条
+. 反序列化
+. 拦截器
+. 处理数据
+
+== 消费者重要参数
+
+|===
+| 参数名称 | 描述
+
+| bootstrap.servers
+| 向Kafka 集群建立初始连接用到的 host/port 列表。
+
+| key.deserializer 和 value.deserializer
+| 指定接收消息的 key 和 value 的反序列化类型。一定要写全类名。
+
+| group.id
+| 标记消费者所属的消费者组。
+
+|enable.auto.commit
+| 默认值为 true，消费者会自动周期性地向服务器提交偏移量。
+
+| auto.commit.interval.ms
+| 如果设置了 enable.auto.commit 的值为 true， 则该值定义了消费者偏移量向 Kafka 提交的频率，默认 5s。
+
+| auto.offset.reset | 当 Kafka 中没有初始偏移量或当前偏移量在服务器中不存在（如，数据被删除了），该如何处理？ earliest：自动重置偏
+移量到最早的偏移量。 latest：默认，自动重置偏移量为最
+新的偏移量。 none：如果消费组原来的（previous）偏移量
+不存在，则向消费者抛异常。 anything：向消费者抛异常。
+
+| offsets.topic.num.partitions | `__consumer_offsets` 的分区数，默认是50 个分区。
+
+| heartbeat.interval.ms | Kafka 消费者和 coordinator 之间的心跳时间，默认3s。该条目的值必须小于 `session.timeout.ms` ，也不应该高于
+`session.timeout.ms` 的 1/3。
+
+| session.timeout.ms | Kafka 消费者和 coordinator 之间连接超时时间，默认 45s。超过该值，该消费者被移除，消费者组执行再平衡。
+
+| max.poll.interval.ms | 消费者处理消息的最大时长，默认是 5 分钟。超过该值，该消费者被移除，消费者组执行再平衡。
+
+| fetch.min.bytes | 默认 1 个字节。消费者获取服务器端一批消息最小的字节数。
+
+| fetch.max.wait.ms | 默认 500ms。如果没有从服务器端获取到一批数据的最小字节数。该时间到，仍然会返回数据。
+
+| fetch.max.bytes | 默认 Default: 52428800（50 m）。消费者获取服务器端一批消息最大的字节数。如果服务器端一批次的数据大于该值
+（50m）仍然可以拉取回来这批数据，因此，这不是一个绝对最大值。一批次的大小受 message.max.bytes （broker config）or max.message.bytes （topic config）影响。
+
+| max.poll.records | 一次poll 拉取数据返回消息的最大条数，默认是500 条。
+|===
+
+== 案例
+
+=== 独立消费者案例（订阅主题）
+
+创建一个独立消费者，消费 first 主题中数据。
+
+[NOTE]
+====
+在消费者 API 代码中必须配置消费者组 id。命令行启动消费者不填写消费者组 id 会被自动填写随机的消费者组 id。
+====
+
+.CustomConsumer
+[source,java]
+----
+public class CustomConsumer {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+				StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+				StringDeserializer.class.getName());
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+
+----
+
+测试，在 Kafka 集群控制台，创建 Kafka 生产者，并输入数据。
+
+[source,shell]
+----
+[root@cluster001 first-0]# kafka-console-producer.sh --bootstrap-server cluster001:9092 --topic first
+>hello
+>world
+>jcohy
+>
+----
+
+在控制台中查看输出
+
+[source,shell]
+----
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 9, CreateTime = 1698655303666, serialized key size = -1, serialized value size = 5, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = hello)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 10, CreateTime = 1698655316290, serialized key size = -1, serialized value size = 5, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = world)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 11, CreateTime = 1698655321678, serialized key size = -1, serialized value size = 5, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy)
+----
+
+=== 独立消费者案例（订阅分区）
+
+创建一个独立消费者，消费 first 主题0 号分区的数据。
+
+.CustomConsumerPartition
+[source,java]
+----
+public class CustomConsumerPartition {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG,
+				StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG,
+				StringDeserializer.class.getName());
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 消费某个主题的某个分区数据
+		ArrayList<TopicPartition> topicPartitions = new ArrayList<>();
+		topicPartitions.add(new TopicPartition("first", 0));
+		kafkaConsumer.assign(topicPartitions);
+		while (true){
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+
+----
+
+测试，使用 <<kafka-producer-code>> 中的代码往分别往分区 0，1 中发送数据。
+
+[source,text]
+----
+ 主 题 : first->分区:0
+ 主 题 : first->分区:0
+ 主 题 : first->分区:0
+ 主 题 : first->分区:0
+ 主 题 : first->分区:0
+
+ 主 题 : first->分区:1
+ 主 题 : first->分区:1
+ 主 题 : first->分区:1
+ 主 题 : first->分区:1
+ 主 题 : first->分区:1
+----
+
+观察 IDEA 控制台输出
+
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 10, CreateTime = 1698655961290, serialized key size = 0, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = , value = jcohy 0)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 11, CreateTime = 1698655961294, serialized key size = 0, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = , value = jcohy 1)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 12, CreateTime = 1698655961294, serialized key size = 0, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = , value = jcohy 2)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 13, CreateTime = 1698655961294, serialized key size = 0, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = , value = jcohy 3)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 14, CreateTime = 1698655961294, serialized key size = 0, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = , value = jcohy 4)
+----
+
+=== 消费者组案例
+
+同一个主题的分区数据，只能由一个消费者组中的一个消费。
+
+创建三个消费者，指定 `ConsumerConfig.GROUP_ID_CONFIG` 为 `test`.
+
+.CustomConsumerGroup1
+[source,java]
+----
+public class CustomConsumerGroup1 {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		// 配置消费者组 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<String, String>(properties);
+		// 注册主题
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+
+----
+
+测试，启动三个消费者。 <<kafka-producer-code>> 中的代码发送数据，发送 500 条。
+
+查看控制台
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1831, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3694)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1832, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3695)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1833, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3696)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1834, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3697)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1835, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3698)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 1836, CreateTime = 1698656750271, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 3699)
+....
+....
+----
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 2762, CreateTime = 1698656750273, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 4987)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 2763, CreateTime = 1698656750273, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 4988)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 2764, CreateTime = 1698656750273, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 4989)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 2765, CreateTime = 1698656750273, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 4990)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 2766, CreateTime = 1698656750273, serialized key size = -1, serialized value size = 10, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 4991)
+....
+....
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 58, CreateTime = 1698656655432, serialized key size = -1, serialized value size = 8, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 43)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 59, CreateTime = 1698656655432, serialized key size = -1, serialized value size = 8, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 44)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 60, CreateTime = 1698656655432, serialized key size = -1, serialized value size = 8, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 45)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 61, CreateTime = 1698656655432, serialized key size = -1, serialized value size = 8, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 46)
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 62, CreateTime = 1698656655432, serialized key size = -1, serialized value size = 8, headers = RecordHeaders(headers = [], isReadOnly = false), key = null, value = jcohy 47)
+....
+....
+----
+
+可以看到三个消费者在消费不同分区的数据（如果只发生到一个分区，可以在发送时增加延迟代码 Thread.sleep(2);） 。
+
+[[kafka-consumer-balance]]
+== 生产经验 —— 分区的分配以及再平衡
+
+一个 consumer group 中有多个 consumer 组成，一个 topic 有多个 partition 组成，现在的问题是，到底由哪个 consumer 来消费哪个 partition 的数据。
+
+Kafka有四种主流的分区分配策略： Range、RoundRobin、Sticky、CooperativeSticky。
+
+可以通过配置参数 `partition.assignment.strategy`，修改分区的分配策略。默认策略是 Range + CooperativeSticky。Kafka 可以同时使用多个分区分配策略。
+
+
+|===
+| 参数名称 | 描述
+
+| heartbeat.interval.ms Kafka
+| 消费者和 coordinator 之间的心跳时间，默认 3s。该条目的值必须小于 session.timeout.ms ，也不应该高于 session.timeout.ms 的1/3。
+
+| session.timeout.ms
+| Kafka 消费者和 coordinator 之间连接超时时间，默认 45s。超过该值，该消费者被移除，消费者组执行再平衡。
+
+| max.poll.interval.ms
+| 消费者处理消息的最大时长，默认是 5 分钟。超过该值，该消费者被移除，消费者组执行再平衡。
+
+| partition.assignment.strategy
+| 消费者分区分配策略 ， 默认策略是 Range +CooperativeSticky。Kafka 可以同时使用多个分区分配策略。可以选择的策略包括：Range、RoundRobin 、Sticky、
+CooperativeSticky
+|===
+
+=== Range 以及再平衡
+
+Range 是对每个 topic 而言的。
+
+首先对同一个 topic 里面的分区按照序号进行排序，并对消费者按照字母顺序进行排序。
+
+假如现在有 7 个分区，3 个消费者，排序后的分区将会是 0,1,2,3,4,5,6；消费者排序完之后将会是C0,C1,C2。
+通过 partitions数/consumer数 来决定每个消费者应该消费几个分区。如果除不尽，那么前面几个消费者将会多消费 1 个分区。
+
+例如，7/3 = 2 余 1 ，除不尽，那么 消费者 C0 便会多消费 1 个分区。 8/3=2 余 2，除不尽，那么 C0 和 C1 分别多消费一个。
+
+[NOTE]
+====
+如果只是针对 1 个 topic 而言，C0 消费者多消费 1 个分区影响不是很大。但是如果有 N 多个 topic，那么针对每
+个 topic，消费者 C0 都将多消费 1 个分区，topic 越多，C0 消费的分区会比其他消费者明显多消费 N 个分区。容易产生数据倾斜！
+====
+
+==== 案例
+
+1、修改主题 first 为7 个分区。
+
+[source,shell]
+----
+[root@cluster001 first-0]# kafka-topics.sh --bootstrap-server cluster001:9092 --alter --topic first --partitions 7
+----
+
+2、编写生产者代码，让数据发送到不同的分区
+
+[source,java]
+----
+public class CustomProducerCallback {
+	public static void main(String[] args) {
+		// 1. 创建 kafka 生产者的配置对象
+		Properties properties = new Properties();
+		// 2. 给 kafka 配置对象添加配置信息:bootstrap.servers
+		properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,"cluster001:9092");
+		// key,value 序列化
+		properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+		properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+
+		// 3. 创建 kafka 生产者对象
+		KafkaProducer<String,String> kafkaProducer = new KafkaProducer<>(properties);
+
+		// 4. 调用 send 方法,向 first 主题发送消息
+		for (int i = 0; i < 7; i++) {
+			kafkaProducer.send(new ProducerRecord<>("first",i,"test","jcohy " + i),
+					(metadata, exception) -> { // // 该方法在Producer收到ack时调用，为异步调用
+				if(exception == null) {
+					// 没有异常,输出信息到控制台
+					System.out.println(" 主 题 : " +
+							metadata.topic() + "->" + "分区:" + metadata.partition());
+				} else {
+					exception.printStackTrace();
+				}
+
+			});
+		}
+		// 5. 关闭资源
+		kafkaProducer.close();
+	}
+}
+----
+
+3、编写三个消费者代码，并在同一个 `test` 组中
+
+[source,java]
+----
+public class CustomConsumerGroup1 {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		// 配置消费者组 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<String, String>(properties);
+		// 注册主题
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+----
+
+4、同时启动三个消费者，然后再启动生产者代码，观察 IDEA 控制台输出，看看三个消费者分别消费了那个分区的数据。
+
+.CustomConsumerGroup1
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 922, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1424, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
++
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 988, CreateTime = 1698722472543, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3570, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3288, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 924, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 60, CreateTime = 1698722472547, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
++
+* CustomConsumerGroup1：消费到 5，6 号分区的数据
+* CustomConsumerGroup2: 消费到 0，1，2 号分区的数据
+* CustomConsumerGroup3：消费到 3，4 号分区的数据
+
+5、停止掉 `CustomConsumerGroup1` 号消费者，快速重新发送消息观看结果（45s 以内，越快越好） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 989, CreateTime = 1698722601768, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3571, CreateTime = 1698722601773, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3289, CreateTime = 1698722601773, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 925, CreateTime = 1698722601774, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 61, CreateTime = 1698722601773, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
+
+我们可以看到
+
+* CustomConsumerGroup2 号消费者：消费到 0，2，1 号分区数据。
+* CustomConsumerGroup3 号消费者：消费到 4，3 号分区数据。
+
+`CustomConsumerGroup1` 号消费者的任务会整体被分配到 `CustomConsumerGroup2` 号消费者或者 `CustomConsumerGroup3` 号消费者。
+
+说明：`CustomConsumerGroup1` 号消费者挂掉后，消费者组需要按照超时时间 45s 来判断它是否退出，所以需
+要等待，时间到了 `45s` 后，判断它真的退出就会把任务分配给其他 broker 执行。
+
+6、再次重新发送消息观看结果（45s 以后） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 990, CreateTime = 1698723043957, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3572, CreateTime = 1698723043961, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3290, CreateTime = 1698723043961, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 62, CreateTime = 1698723043961, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 926, CreateTime = 1698723043962, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 924, CreateTime = 1698723043962, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1426, CreateTime = 1698723043962, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+CustomConsumerGroup2 号消费者：消费到 0、1、2、3 号分区数据。
+CustomConsumerGroup3 号消费者：消费到 4、5、6 号分区数据。
+
+说明：`CustomConsumerGroup1` 已经被踢出消费者组，所以重新按照 range 方式分配。
+
+=== RoundRobin 以及再平衡
+
+RoundRobin 针对集群中所有 Topic 而言。
+
+RoundRobin 轮询分区策略，是把所有的 partition 和所有的 consumer 都列出来，然后按照 hashcode 进行排序，最后
+通过轮询算法来分配 partition 给到各个消费者。
+
+==== 案例
+
+1、依次在 CustomConsumerGroup1、CustomConsumerGroup2、CustomConsumerGroup3 三个消费者代码中修改分区分配策略为 RoundRobin。
+
+[source,java]
+----
+public class CustomConsumerGroup1 {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 修改分区分配策略
+		properties.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, "org.apache.kafka.clients.consumer.RoundRobinAssignor");
+		// 配置消费者组 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test2");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<String, String>(properties);
+		// 注册主题
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+----
+
+2、重启 3 个消费者，重复发送消息的步骤，观看分区结果。
+
+.CustomConsumerGroup1
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3569, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 921, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+----
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3287, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 923, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 987, CreateTime = 1698722260872, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 59, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1423, CreateTime = 1698722260877, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+我们可以看出
+
+* CustomConsumerGroup1：消费到 2，5 号分区的数据
+* CustomConsumerGroup2: 消费到 1，4 号分区的数据
+* CustomConsumerGroup3：消费到 0，3，6 号分区的数据
+
+3、停止掉 `CustomConsumerGroup1` 号消费者，快速重新发送消息观看结果（45s 以内，越快越好） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 928, CreateTime = 1698723375448, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3292, CreateTime = 1698723375448, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 992, CreateTime = 1698723375443, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 64, CreateTime = 1698723375448, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1428, CreateTime = 1698723375448, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+* CustomConsumerGroup2：消费到 2、5 号分区数据
+* CustomConsumerGroup3 号消费者：消费到 4、1 号分区数据
+
+CustomConsumerGroup1 号消费者的任务会按照 RoundRobin 的方式，把数据轮询分成 0 、6 和 3 号分区数据，分别由 `CustomConsumerGroup2` 号消费者或者 `CustomConsumerGroup3` 号消费者消费。
+
+CustomConsumerGroup1 号消费者挂掉后，消费者组需要按照超时时间 `45s` 来判断它是否退出，所以需要等待，时间到了 `45s` 后，判断它真的退出就会把任务分配给其他 broker 执行。
+
+4、再次重新发送消息观看结果（45s 以后） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3293, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 65, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 927, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 993, CreateTime = 1698723533230, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3575, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 929, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1429, CreateTime = 1698723533234, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+* CustomConsumerGroup2：消费到 1，3，5 号分区数据
+* CustomConsumerGroup3 号消费者：消费到 0，2，4，6 号分区数据
+
+`CustomConsumerGroup1` 已经被踢出消费者组，所以重新按照 RoundRobin 方式分配。
+
+=== Sticky 以及再平衡
+
+粘性分区定义：可以理解为分配的结果带有“粘性的”。即在执行一次新的分配之前，考虑上一次分配的结果，尽量少的调整分配的变动，可以节省大量的开销。
+
+粘性分区是 Kafka 从 0.11.x 版本开始引入这种分配策略，首先会尽量均衡的放置分区到消费者上面，在出现同一消费者组内消费者出现问题的时候，会尽量保持原有分配的分区不变化。
+
+
+==== 案例
+
+1、依次在 CustomConsumerGroup1、CustomConsumerGroup2、CustomConsumerGroup3 三个消费者代码中修改分区分配策略为 RoundRobin。
+
+[source,java]
+----
+public class CustomConsumerGroup1 {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 修改分区分配策略
+		properties.put(ConsumerConfig.PARTITION_ASSIGNMENT_STRATEGY_CONFIG, "org.apache.kafka.clients.consumer.StickyAssignor");
+		// 配置消费者组 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test3");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<String, String>(properties);
+		// 注册主题
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+----
+
+2、重启 3 个消费者，重复发送消息的步骤，观看分区结果。
+
+.CustomConsumerGroup1
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 928, CreateTime = 1698723880281, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 930, CreateTime = 1698723880280, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1430, CreateTime = 1698723880281, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3576, CreateTime = 1698723880280, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 66, CreateTime = 1698723880280, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 994, CreateTime = 1698723880276, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3294, CreateTime = 1698723880280, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+----
+
+我们可以看出
+
+* CustomConsumerGroup1：消费到 4，5，6 号分区的数据
+* CustomConsumerGroup2: 消费到 2，3 号分区的数据
+* CustomConsumerGroup3：消费到 0，1 号分区的数据
+
+3、停止掉 `CustomConsumerGroup1` 号消费者，快速重新发送消息观看结果（45s 以内，越快越好） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3577, CreateTime = 1698723957025, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 67, CreateTime = 1698723957025, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 995, CreateTime = 1698723957020, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3295, CreateTime = 1698723957025, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+----
+
+* CustomConsumerGroup2：消费到 2、3 号分区数据
+* CustomConsumerGroup3 号消费者：消费到 0、1 号分区数据
+
+CustomConsumerGroup1 号消费者的任务会按照粘性规则，尽可能均衡的随机分成 4，5 和 6 号分区数据，分别由 `CustomConsumerGroup2` 号消费者或者 `CustomConsumerGroup3` 号消费者消费。
+
+CustomConsumerGroup1 号消费者挂掉后，消费者组需要按照超时时间 `45s` 来判断它是否退出，所以需要等待，时间到了 `45s` 后，判断它真的退出就会把任务分配给其他 broker 执行。
+
+4、再次重新发送消息观看结果（45s 以后） 。
+
+.CustomConsumerGroup2
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 5, leaderEpoch = 0, offset = 930, CreateTime = 1698724083135, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 5)
+ConsumerRecord(topic = first, partition = 2, leaderEpoch = 4, offset = 3578, CreateTime = 1698724083135, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 2)
+ConsumerRecord(topic = first, partition = 3, leaderEpoch = 0, offset = 68, CreateTime = 1698724083135, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 3)
+----
+
+.CustomConsumerGroup3
+[source,text]
+----
+ConsumerRecord(topic = first, partition = 0, leaderEpoch = 4, offset = 996, CreateTime = 1698724083131, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 0)
+ConsumerRecord(topic = first, partition = 1, leaderEpoch = 2, offset = 3296, CreateTime = 1698724083134, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 1)
+ConsumerRecord(topic = first, partition = 4, leaderEpoch = 0, offset = 932, CreateTime = 1698724083135, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 4)
+ConsumerRecord(topic = first, partition = 6, leaderEpoch = 0, offset = 1432, CreateTime = 1698724083135, serialized key size = 4, serialized value size = 7, headers = RecordHeaders(headers = [], isReadOnly = false), key = test, value = jcohy 6)
+----
+
+* CustomConsumerGroup2：消费到 2，3，5 号分区数据
+* CustomConsumerGroup3 号消费者：消费到 0，1，4，6 号分区数据
+
+`CustomConsumerGroup1` 已经被踢出消费者组，所以重新按照粘性方式分配。
+
+[[kafka-consumer-offset]]
+== offset 位移
+
+[[kafka-consumer-offset-stroage]]
+=== offset 的默认维护位置
+
+从 0.9 版本开始，consumer 默认将 offset 保存在 Kafka 一个内置的 topic 中，该 topic 为 `__consumer_offsets`。
+
+Kafka 0.9 版本之前， consumer 默认将 offset 保存在 Zookeeper 中。
+
+`__consumer_offsets` 主题里面采用 key 和 value 的方式存储数据。key 是 `group.id+topic+分区号`，value 就是当前 offset 的值。每隔一段时间，kafka 内部会对这个 topic 进行
+compact，也就是每个 `group.id+topic+分区号` 就保留最新数据。
+
+`__consumer_offsets` 为 Kafka 中的 topic，那就可以通过消费者进行消费。
+
+在配置文件 `config/consumer.properties` 中添加配置 `exclude.internal.topics=false`， 默认是 `true`，表示不能消费系统主题。为了查看该系统主题数据，所以该参数修改为 `false`。
+
+.示例
+[source,shell]
+----
+# 创建一个新的topic。
+[root@cluster001 ~]# kafka-topics.sh --bootstrap-server cluster001:9092 --create --topic jcohy --partitions 2 --replication-factor 2
+Created topic jcohy.
+# 启动生产者往 jcohy 生产数据。
+[root@cluster001 ~]# kafka-console-producer.sh --bootstrap-server cluster001:9092 --topic jcohy
+>hello jcohy
+>
+# 启动消费者消费 atguigu 数据。
+[root@cluster001 ~]# kafka-console-consumer.sh --bootstrap-server cluster001:9092 --topic jcohy --group test
+# 查看消费者消费主题 __consumer_offsets。
+[root@cluster001 ~]# kafka-console-consumer.sh --bootstrap-server cluster001:9092 --topic __consumer_offsets --consumer.config=/usr/local/kafka/config/consumer.properties --formatter "kafka.coordinator.group.GroupMetadataManager\$OffsetsMessageFormatter" --from-beginning
+[test,first,5]::OffsetAndMetadata(offset=931, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,6]::OffsetAndMetadata(offset=1433, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,3]::OffsetAndMetadata(offset=69, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,4]::OffsetAndMetadata(offset=933, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,1]::OffsetAndMetadata(offset=3297, leaderEpoch=Optional[2], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,0]::OffsetAndMetadata(offset=997, leaderEpoch=Optional[4], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+[test,first,2]::OffsetAndMetadata(offset=3579, leaderEpoch=Optional[4], metadata=, commitTimestamp=1698725510246, expireTimestamp=None)
+# 注意这两行
+[test,jcohy,1]::OffsetAndMetadata(offset=2, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510247, expireTimestamp=None)
+[test,jcohy,0]::OffsetAndMetadata(offset=2, leaderEpoch=Optional[0], metadata=, commitTimestamp=1698725510247, expireTimestamp=None)
+----
+
+[[kafka-consumer-offset-auto-commit]]
+=== 自动提交 offset
+
+为了使我们能够专注于自己的业务逻辑，Kafka 提供了自动提交 offset 的功能。
+
+自动提交 offset 的相关参数：
+
+
+|===
+| 参数名称 | 描述
+
+| enable.auto.commit
+| 是否开启自动提交 offset 功能，默认是 true。消费者会自动周期性地向服务器提交偏移量。
+
+| auto.commit.interval.ms
+| 如果设置了 enable.auto.commit 的值为 true， 则该值定义了消费者偏移量向 Kafka 提交的频率，默认 5s。
+|===
+
+[source,java]
+----
+public class CustomConsumer {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 是否自动提交 offset
+		properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,true);
+		// 提交offset 的时间周期1000ms，默认5s
+		properties.put(ConsumerConfig.AUTO_COMMIT_INTERVAL_MS_CONFIG,1000);
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+		}
+	}
+}
+----
+
+[[kafka-consumer-offset-multi-commit]]
+=== 手动提交 offset
+
+虽然自动提交 offset 十分简单便利，但由于其是基于时间提交的，开发人员难以把握 offset 提交的时机。因此 Kafka 还提供了手动提交 offset 的 API。
+
+手动提交 offset 的方法有两种：分别是 commitSync（同步提交）和 commitAsync（异步提交）。两者的相同点是，都会将本次提交的一批数据最高的偏移量提交；
+不同点是，同步提交阻塞当前线程，一直到提交成功，并且会自动失败重试（由不可控因素导致，也会出现提交失败）；而异步提交则没有失败重试机制，故有可能提交失败。
+
+* commitSync（同步提交）：必须等待 offset 提交完毕，再去消费下一批数据。
+* commitAsync（异步提交） ：发送完提交 offset 请求后，就开始消费下一批数据了。
+
+.同步提交
+[source,java]
+----
+public class CustomConsumerAutoOffset {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 是否自动提交 offset
+		properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,false);
+
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+			// 同步提交offset
+			kafkaConsumer.commitSync();
+		}
+	}
+}
+
+----
+
+.异步提交
+[source,java]
+----
+public class CustomConsumerAsyncOffset {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 是否自动提交 offset
+		properties.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG,false);
+
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+			// 同步提交offset
+			kafkaConsumer.commitAsync();
+		}
+	}
+}
+----
+
+[[kafka-consumer-offset-consumer]]
+=== 指定 Offset 消费
+
+auto.offset.reset = earliest | latest | none 默认是 latest。
+
+当 Kafka 中没有初始偏移量（消费者组第一次消费）或服务器上不再存在当前偏移量
+时（例如该数据已被删除），该怎么办？
+
+* earliest：自动将偏移量重置为最早的偏移量，--from-beginning。
+* latest（默认值） ：自动将偏移量重置为最新偏移量。
+* none：如果未找到消费者组的先前偏移量，则向消费者抛出异常。
+
+.任意指定 offset 位移开始消费
+[source,java]
+----
+public class CustomConsumerSeek {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+
+		Set<TopicPartition> assignment= new HashSet<>();
+		while (assignment.size() == 0) {
+			kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 获取消费者分区分配信息（有了分区分配信息才能开始消费）
+			assignment = kafkaConsumer.assignment();
+		}
+
+		// 遍历所有分区，并指定 offset 从 1700 的位置开始消费
+		for (TopicPartition tp: assignment) {
+			kafkaConsumer.seek(tp, 1700);
+		}
+
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+			// 同步提交offset
+			kafkaConsumer.commitAsync();
+		}
+	}
+}
+----
+
+[[kafka-consumer-offset-time]]
+=== 指定时间消费
+
+在生产环境中，会遇到最近消费的几个小时数据异常，想重新按照时间消费。 例如要求按照时间消费前一天的数据，怎么处理？
+
+.CustomConsumerFromTime
+[source,java]
+----
+public class CustomConsumerFromTime {
+
+	public static void main(String[] args) {
+		// 1.创建消费者的配置对象
+		Properties properties = new Properties();
+		// 2.给消费者配置对象添加参数
+		properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, "cluster001:9092");
+		// 配置序列化 必须
+		properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+		properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
+
+		// 配置消费者组（组名任意起名） 必须
+		properties.put(ConsumerConfig.GROUP_ID_CONFIG, "test");
+
+		// 创建消费者对象
+		KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(properties);
+		// 注册要消费的主题（可以消费多个主题）
+		ArrayList<String> topics = new ArrayList<>();
+		topics.add("first");
+		kafkaConsumer.subscribe(topics);
+
+		Set<TopicPartition> assignment = new HashSet<>();
+		while (assignment.size() == 0) {
+			kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 获取消费者分区分配信息（有了分区分配信息才能开始消费）
+			assignment = kafkaConsumer.assignment();
+		}
+		HashMap<TopicPartition, Long> timestampToSearch = new HashMap<>();
+		// 封装集合存储，每个分区对应一天前的数据
+		for (TopicPartition topicPartition : assignment) {
+			timestampToSearch.put(topicPartition,
+					System.currentTimeMillis() - 1 * 24 * 3600 * 1000);
+		}
+		// 获取从1天前开始消费的每个分区的 offset
+		Map<TopicPartition, OffsetAndTimestamp> offsets =
+				kafkaConsumer.offsetsForTimes(timestampToSearch);
+		// 遍历每个分区，对每个分区设置消费时间。
+		for (TopicPartition topicPartition : assignment) {
+			OffsetAndTimestamp offsetAndTimestamp =
+					offsets.get(topicPartition);
+			// 根据时间指定开始消费的位置
+			if (offsetAndTimestamp != null){
+				kafkaConsumer.seek(topicPartition,
+						offsetAndTimestamp.offset());
+			}
+		}
+
+		// 拉取数据打印
+		while (true) {
+			// 设置1s中消费一批数据
+			ConsumerRecords<String, String> consumerRecords =
+					kafkaConsumer.poll(Duration.ofSeconds(1));
+			// 打印消费到的数据
+			for (ConsumerRecord<String, String> consumerRecord :
+					consumerRecords) {
+				System.out.println(consumerRecord);
+			}
+			// 同步提交offset
+			kafkaConsumer.commitAsync();
+		}
+	}
+}
+----
+
+=== 漏消费和重复消费
+
+==== 重复消费
+已经消费了数据，但是 offset 没提交。
+
+场景: 重复消费。自动提交offset引起。
+
+. Consumer 每 5s 提交 offset
+. 如果提交 offset 后的 2s，consumer 挂了
+. 再次重启 consumer，则从上一次提交的 offset 处继续消费，导致重复消费
+
+==== 漏消费
+
+先提交 offset 后消费，有可能会造成数据的漏消费。
+
+设置 offset 为手动提交，当 offset 被提交时，数据还在内存中未落盘，此时刚好消费者线程被 kill 掉，那么 offset 已经提交，但是数据未处理，导致这部分内存中的数据丢失。
+
+思考：怎么能做到既不漏消费也不重复消费呢？详看 <<kafka-consumer-transation>>。
+
+[[kafka-consumer-transation]]
+== 生产经验——消费者事务
+
+如果想完成 Consumer 端的精准一次性消费，那么需要 Kafka 消费端将消费过程和提交 offset 过程做原子绑定。此时我们需要将 Kafka 的 offset 保存到支持事务的自定义介质（比如 MySQL）。这部分知识会在后续项目部分涉及。
+
+[[kafka-consumer-qps]]
+== 生产经验——数据积压（消费者如何提高吞吐量）
+
+如果是 Kafka 消费能力不足，则可以考虑增加 Topic 的分区数，并且同时提升消费组的消费者数量，消费者数= 分区数。（两者缺一不可）
+
+如果是下游的数据处理不及时：提高每批次拉取的数量。批次拉取数据过少（拉取数据/处理时间 < 生产速度），使处理的数据小于生产的数据，也会造成数据积压。
+
+|===
+| 参数名称 | 描述
+
+| fetch.max.bytes 默认Default: 52428800（50 m） 。
+| 消费者获取服务器端一批消息最大的字节数。如果服务器端一批次的数据大于该值（50m）仍然可以拉取回来这批数据，因此，这不是一个绝对最大值。一批次的大小受 message.max.bytes （broker
+config）or max.message.bytes （topic config）影响。
+
+| max.poll.records 一次poll
+| 拉取数据返回消息的最大条数，默认是500 条
+|===

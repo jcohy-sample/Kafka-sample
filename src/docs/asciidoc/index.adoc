@@ -17,6 +17,11 @@ include::command.adoc[leveloffset=+1]
 
 include::produccer.adoc[leveloffset=+1]
 
+include::consumer.adoc[leveloffset=+1]
+
+include::broker.adoc[leveloffset=+1]
+
+include::optimize.adoc[leveloffset=+1]
 
 
 

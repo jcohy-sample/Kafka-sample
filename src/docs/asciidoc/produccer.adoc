@@ -5,11 +5,12 @@
 
 === 发送原理
 
-image::img/kafka-producer001.png[]
+image::{oss-images}/kafka-producer001.png[]
 
 在消息发送的过程中，涉及到了两个线程—— main 线程和 Sender 线程。在 main 线程 中创建了一个双端队列 `RecordAccumulator`。
 main 线程将消息发送给 `RecordAccumulator`， Sender 线程不断从 `RecordAccumulator` 中拉取消息发送到 Kafka Broker。
 
+[[kafka-producer-args]]
 === 生产者重要参数列表
 
 |===
@@ -84,7 +85,7 @@ public class CustomProducer {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
+[root@cluster001 ~]# kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
 jcohy 0
 jcohy 1
 jcohy 2
@@ -92,6 +93,7 @@ jcohy 3
 jcohy 4
 ----
 
+[[kafka-producer-code]]
 === 带有回调的异步发送
 
 回调函数会在 producer 收到 ack 时调用，为异步调用，该方法有两个参数，分别是元 数据信息(RecordMetadata)和异常信息(Exception)，如果 Exception 为 null，说明消息发 送成功，如果 Exception 不为 null，说明消息发送失败。
@@ -137,7 +139,7 @@ public class CustomProducerCallback {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
+[root@cluster001 ~]# kafka-console-consumer --bootstrap-server cluster001:9092 --topic first
 jcohy 0
 jcohy 1
 jcohy 2
@@ -145,7 +147,7 @@ jcohy 3
 jcohy 4
 ----
 
-. Idea 控制台输出
+.Idea 控制台输出
 [source,text]
 ----
  主 题 : first->分区:0
@@ -295,14 +297,14 @@ public class ProducerRecord<K, V> {
 
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server cluster001:9092 --create --partitions 3 --replication-factor 1 --topic sample-partition
+[root@cluster001 ~]# kafka-topics --bootstrap-server cluster001:9092 --create --partitions 3 --replication-factor 1 --topic sample-partition
 Created topic sample-partition.
-jcohy@jcohy-mac ~ % kafka-topics --bootstrap-server cluster001:9092 --describe --topic sample-partition
+[root@cluster001 ~]# kafka-topics --bootstrap-server cluster001:9092 --describe --topic sample-partition
 Topic: sample-partition TopicId: 87hiax0URsGpjxwd0wxPGg PartitionCount: 3       ReplicationFactor: 1    Configs:
         Topic: sample-partition Partition: 0    Leader: 0       Replicas: 0     Isr: 0
         Topic: sample-partition Partition: 1    Leader: 0       Replicas: 0     Isr: 0
         Topic: sample-partition Partition: 2    Leader: 0       Replicas: 0     Isr: 0
-jcohy@jcohy-mac ~ %
+[root@cluster001 ~]#
 ----
 
 * 案例一: 将数据发往指定 partition 的情况下，例如，将所有数据发往分区 1 中。
@@ -346,7 +348,7 @@ public class CustomProducerCallbackPartitions {
 +
 [source,shell]
 ----
-jcohy@jcohy-mac ~ % kafka-console-consumer --bootstrap-server cluster001:9092 --topic sample-partition
+[root@cluster001 ~]# kafka-console-consumer --bootstrap-server cluster001:9092 --topic sample-partition
 jcohy 0
 jcohy 1
 jcohy 2
@@ -355,7 +357,7 @@ jcohy 4
 
 ----
 +
-. Idea 控制台输出
+.Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:1
@@ -411,7 +413,7 @@ public class CustomProducerCallbackWithKey {
 +
 在 kafka 上开启消费者，然后执行代码，来查看是否能接受到消息
 +
-. key="a" 时。Idea 控制台输出
+.key="a" 时。Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:0
@@ -421,7 +423,7 @@ public class CustomProducerCallbackWithKey {
  主 题 : sample-partition->分区:0
 ----
 +
-. key="b" 时。Idea 控制台输出
+.key="b" 时。Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:1
@@ -431,7 +433,7 @@ public class CustomProducerCallbackWithKey {
  主 题 : sample-partition->分区:1
 ----
 +
-. key="f" 时。Idea 控制台输出
+.key="f" 时。Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:2
@@ -448,7 +450,7 @@ public class CustomProducerCallbackWithKey {
 实现步骤
 
 . 定义类实现 Partitioner 接口。
-. 重写 partition()方法。
+. 重写 `partition()` 方法。
 
 [source,java]
 ----
@@ -537,7 +539,7 @@ public class CustomProducerCallbackWithCustomPartition {
 
 在 kafka 上开启消费者，然后执行代码，来查看是否能接受到消息
 
-. 当 value 包含"jcohy",Idea 控制台输出
+.当 value 包含"jcohy",Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:0
@@ -547,7 +549,7 @@ public class CustomProducerCallbackWithCustomPartition {
  主 题 : sample-partition->分区:0
 ----
 
-. 当 value 不包含"jcohy",Idea 控制台输出
+.当 value 不包含"jcohy",Idea 控制台输出
 [source,text]
 ----
  主 题 : sample-partition->分区:1
@@ -557,6 +559,7 @@ public class CustomProducerCallbackWithCustomPartition {
  主 题 : sample-partition->分区:1
 ----
 
+[[kafka-producer-qps]]
 == 生产者如何提高吞吐量
 
 
@@ -611,18 +614,19 @@ public class CustomProducerParameters {
 }
 ----
 
+[[kafka-producer-reliability]]
 == 数据的可靠性
 
 ack 应答原理
 
 * 0:生产者发送过来的数据，不需要等数据落盘应答
 +
-image:img/kafka-ack0.jpg[]
+image::{oss-images}/kafka-ack0.jpg[]
 * 1:生产者发送过来的数据，Leader收到数据后应答。
 +
-image:img/kafka-ack1.jpg[]
+image::{oss-images}/kafka-ack1.jpg[]
 * -1(all):生产者发送过来的数据，Leader 和 ISR 队列里面 的所有节点收齐数据后应答。
-image:img/kafka-ackall.jpg[]
+image::{oss-images}/kafka-ackall.jpg[]
 
 Leader 收到数据，所有 Follower 都开始同步数据，但有一个 Follower，因为某种故障，迟迟不能与 Leader 进行同步，那这个问题怎么解决呢?
 
@@ -654,6 +658,7 @@ properties.put(ProducerConfig.ACKS_CONFIG,"all");
 properties.put(ProducerConfig.RETRIES_CONFIG,1);
 ----
 
+[[kafka-producer-repeat]]
 == 数据的重复性
 
 数据传递语义:
@@ -677,7 +682,7 @@ Kafka 0.11 版本以后，引入了一项重大特性:幂等性和事务。
 Partition 表示分区号;Sequence Number 是单调自增的。
 所以幂等性只能保证的是在单分区单会话内不重复。
 
-image::img/kafka-producer002.png[]
+image::{oss-images}/kafka-producer002.png[]
 
 * 开启参数 `enable.idempotence` 默认为 `true`，`false` 关闭。
 
@@ -687,7 +692,7 @@ Kafka 事务原理
 
 NOTE: 开启事务，必须开启幂等性
 
-image:img/kafka-producer003.png[]
+image::{oss-images}/kafka-producer003.png[]
 
 [source,java]
 ----
@@ -732,10 +737,12 @@ public class CustomProducerTransactions {
 }
 ----
 
+[[kafka-producer-order]]
 == 数据有序
 
 单分区内，有序(有条件的，详见下节); 多分区，分区与分区间无序;
 
+[[kafka-producer-disorder]]
 == 数据乱序
 
 * kafka在 1.x 版本之前保证数据单分区有序，条件如下: `max.in.flight.requests.per.connection=1` (不需要考虑是否开启幂等性)。
